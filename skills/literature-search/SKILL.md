@@ -2,6 +2,7 @@
 name: literature-search
 description: 科研文献检索技能，支持多数据库（Semantic Scholar、arXiv、PubMed）检索、去重、排序和综述生成
 version: 1
+lastUpdated: 2025-01-15
 ---
 
 # Literature Search Skill

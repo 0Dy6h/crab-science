@@ -26,6 +26,15 @@ export class ToolRegistry {
     this.tools.set(tool.name, tool);
   }
 
+  /**
+   * 卸载工具（Phase 2 新增）
+   * 用于 Extension hot-reload 时移除旧工具
+   * @param name - 工具名称
+   */
+  unregister(name: string): void {
+    this.tools.delete(name);
+  }
+
   /** 获取工具 */
   get(name: string): Tool {
     const tool = this.tools.get(name);

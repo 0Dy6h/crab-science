@@ -6,6 +6,7 @@ import { StatusBar } from './components/status-bar.js';
 import { MessageList } from './components/message-list.js';
 import { InputBox } from './components/input-box.js';
 import { Welcome } from './components/welcome.js';
+import { TreeView } from './components/tree-view.js';
 import { CommandHandler } from './commands/handler.js';
 import type { DisplayMessage } from './hooks/use-agent.js';
 
@@ -14,13 +15,16 @@ interface AppProps {
 }
 
 /**
- * 主应用组件
- * Ink 根组件，管理整体布局和用户交互
+ * 主应用组件（Phase 2 增强）
+ *
+ * Ink 根组件，管理整体布局和用户交互。
+ * Phase 2 新增：树形视图面板、Extension 状态显示。
  */
 export function App({ workDir }: AppProps): React.ReactElement {
   const agent = useAgent(workDir);
   const [showWelcome, setShowWelcome] = useState(true);
   const [systemMessages, setSystemMessages] = useState<DisplayMessage[]>([]);
+  const [showTreeView, setShowTreeView] = useState(false);
 
   const handleSubmit = useCallback(
     (text: string) => {
@@ -36,8 +40,13 @@ export function App({ workDir }: AppProps): React.ReactElement {
             id: `sys_${Date.now()}`,
             role: 'assistant',
             content: result.output,
+            isSystem: true,
           };
           setSystemMessages((prev) => [...prev, sysMsg]);
+        }
+        if (result.refreshTree) {
+          // 触发树视图刷新
+          setShowTreeView(false);
         }
         if (result.exit) {
           process.exit(0);
@@ -54,6 +63,12 @@ export function App({ workDir }: AppProps): React.ReactElement {
   // 合并系统消息和 agent 消息
   const allMessages = [...systemMessages, ...agent.messages];
 
+  // 获取树视图数据
+  const tree = agent.getTree();
+  const nodes = agent.getNodes();
+  const currentNodeId = agent.getCurrentNodeId();
+  const rootId = tree?.root?.id ?? '';
+
   return (
     <Box flexDirection="column" height="100%">
       <StatusBar
@@ -67,6 +82,18 @@ export function App({ workDir }: AppProps): React.ReactElement {
       <Box>
         <Text color="gray">{'─'.repeat(60)}</Text>
       </Box>
+
+      {/* Extensions 状态指示器 */}
+      {agent.extensions.length > 0 && (
+        <Box paddingLeft={1}>
+          <Text color="gray">
+            {chalk.cyan('ext')} {agent.extensions.filter((e) => e.status === 'loaded').length}/{agent.extensions.length} loaded
+            {' | '}
+            {chalk.cyan('node')} {currentNodeId.substring(0, 8) || 'none'}
+          </Text>
+        </Box>
+      )}
+
       <Box flexDirection="column" flexGrow={1}>
         {showWelcome && (
           <Welcome
@@ -75,7 +102,17 @@ export function App({ workDir }: AppProps): React.ReactElement {
             skillCount={agent.skills.length}
           />
         )}
-        <MessageList messages={allMessages} />
+        {showTreeView && rootId ? (
+          <TreeView
+            nodes={nodes}
+            rootId={rootId}
+            currentNodeId={currentNodeId}
+            isActive={showTreeView}
+            onClose={() => setShowTreeView(false)}
+          />
+        ) : (
+          <MessageList messages={allMessages} />
+        )}
       </Box>
       <Box>
         <Text color="gray">{'─'.repeat(60)}</Text>

@@ -1,5 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Session, TokenUsage, AppConfig } from '@crab-science/shared';
+import * as path from 'path';
+import type {
+  Session,
+  SessionNode,
+  TokenUsage,
+  AppConfig,
+  LoadedExtension,
+  SkillExecutionRecord,
+} from '@crab-science/shared';
 import {
   Agent,
   ToolRegistry,
@@ -7,21 +15,31 @@ import {
   SkillLoader,
   ContextBuilder,
   ConfigManager,
+  ExtensionLoader,
+  TreeUtils,
 } from '@crab-science/agent-core';
+import type { BranchInfo, TreeStructure } from '@crab-science/agent-core';
 import { createProvider, ProviderRegistry } from '@crab-science/llm-layer';
+import {
+  GLOBAL_EXTENSIONS_DIR,
+  PROJECT_EXTENSIONS_DIR,
+  expandTilde,
+} from '@crab-science/shared';
 
 /** 显示消息类型（CLI 渲染用） */
 export interface DisplayMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'summary';
   content: string;
   toolName?: string;
   toolParams?: Record<string, unknown>;
   toolResult?: { success: boolean; output: string; error?: string };
   isStreaming?: boolean;
+  /** 是否为系统消息（命令输出等） */
+  isSystem?: boolean;
 }
 
-/** useAgent Hook 返回值 */
+/** useAgent Hook 返回值（Phase 2 增强） */
 export interface UseAgentReturn {
   messages: DisplayMessage[];
   isProcessing: boolean;
@@ -29,19 +47,37 @@ export interface UseAgentReturn {
   currentProvider: string;
   tokenUsage: { inputTokens: number; outputTokens: number; cost: number };
   skills: { name: string; description: string }[];
+  extensions: LoadedExtension[];
   sendMessage: (text: string) => Promise<void>;
   switchModel: (model: string) => void;
   switchProvider: (provider: string) => void;
   clearSession: () => void;
   loadSession: (id: string) => boolean;
-  sessionList: { id: string; createdAt: string; model: string; messageCount: number }[];
+  sessionList: { id: string; createdAt: string; model: string; nodeCount: number; version: number }[];
   refreshSessionList: () => void;
   config: AppConfig | null;
+  // Phase 2: Tree operations
+  forkSession: (reason?: string) => string | null;
+  rollbackSession: (nodeId: string) => boolean;
+  jumpToBranch: (nodeId: string) => boolean;
+  summarizeBranch: (branchNodeId?: string) => Promise<string | null>;
+  getTree: () => TreeStructure | null;
+  getNodes: () => Record<string, SessionNode>;
+  listBranches: () => BranchInfo[];
+  getCurrentNodeId: () => string;
+  refreshExtensions: () => void;
+  getSkillHistory: (skillName: string, limit?: number) => SkillExecutionRecord[];
+  refreshDisplay: () => void;
 }
 
 /**
- * Agent 交互 Hook
- * 连接 agent-core 与 CLI 组件
+ * Agent 交互 Hook（Phase 2 树形 Session + Extensions）
+ *
+ * 连接 agent-core 与 CLI 组件，管理：
+ * - 树形 Session 的创建、加载、节点追加
+ * - Extension 加载与热重载
+ * - 分支操作（fork / rollback / jump / summarize）
+ * - 消息显示（从当前路径提取 DisplayMessage）
  */
 export function useAgent(workDir: string): UseAgentReturn {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
@@ -49,6 +85,7 @@ export function useAgent(workDir: string): UseAgentReturn {
   const [tokenUsage, setTokenUsage] = useState({ inputTokens: 0, outputTokens: 0, cost: 0 });
   const [sessionList, setSessionList] = useState<UseAgentReturn['sessionList']>([]);
   const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
+  const [extensions, setExtensions] = useState<LoadedExtension[]>([]);
 
   // 使用 ref 保存可变对象（不触发重渲染）
   const configManagerRef = useRef<ConfigManager | null>(null);
@@ -58,6 +95,8 @@ export function useAgent(workDir: string): UseAgentReturn {
   const sessionRef = useRef<Session | null>(null);
   const agentRef = useRef<Agent | null>(null);
   const skillLoaderRef = useRef<SkillLoader | null>(null);
+  const extensionLoaderRef = useRef<ExtensionLoader | null>(null);
+  const toolRegistryRef = useRef<ToolRegistry | null>(null);
   const messageIdCounter = useRef(0);
 
   const currentModelRef = useRef('');
@@ -66,8 +105,117 @@ export function useAgent(workDir: string): UseAgentReturn {
   const [currentModel, setCurrentModel] = useState('');
   const [currentProvider, setCurrentProvider] = useState('');
 
+  // ============================================================
+  // Session Tree → DisplayMessage 转换
+  // ============================================================
+
+  /**
+   * 从当前 Session 的 root → currentNodeId 路径提取 DisplayMessage[]
+   * 用于在 CLI 中渲染当前分支的对话
+   */
+  const extractDisplayMessages = useCallback((session: Session): DisplayMessage[] => {
+    if (!session.rootId || !session.currentNodeId) {
+      return [];
+    }
+
+    const pathNodes = TreeUtils.getPath(
+      session.nodes,
+      session.rootId,
+      session.currentNodeId,
+    );
+
+    const displayMsgs: DisplayMessage[] = [];
+    for (let i = 0; i < pathNodes.length; i++) {
+      const node = pathNodes[i];
+      const msgId = `node_${i}`;
+
+      switch (node.type) {
+        case 'user': {
+          const content =
+            typeof node.content === 'string' ? node.content : '';
+          displayMsgs.push({
+            id: msgId,
+            role: 'user',
+            content,
+          });
+          break;
+        }
+        case 'assistant': {
+          const content =
+            typeof node.content === 'string'
+              ? node.content
+              : Array.isArray(node.content)
+                ? node.content
+                    .filter((b) => b.type === 'text')
+                    .map((b) => b.text || '')
+                    .join('')
+                : '';
+          displayMsgs.push({
+            id: msgId,
+            role: 'assistant',
+            content,
+          });
+          break;
+        }
+        case 'tool_call': {
+          displayMsgs.push({
+            id: msgId,
+            role: 'tool',
+            content: '',
+            toolName: node.metadata.toolName,
+            toolParams: node.metadata.toolParams,
+          });
+          break;
+        }
+        case 'tool_result': {
+          // 更新上一个 tool_call 消息的结果
+          const lastToolMsg = displayMsgs[displayMsgs.length - 1];
+          if (lastToolMsg && lastToolMsg.role === 'tool') {
+            lastToolMsg.toolResult = {
+              success: !node.metadata.isError,
+              output:
+                typeof node.content === 'string'
+                  ? node.content
+                  : node.metadata.toolResult || '',
+              error: node.metadata.isError
+                ? node.metadata.toolResult
+                : undefined,
+            };
+            lastToolMsg.content = lastToolMsg.toolResult.output;
+          }
+          break;
+        }
+        case 'summary': {
+          const content =
+            node.metadata.summaryText ||
+            (typeof node.content === 'string' ? node.content : '');
+          displayMsgs.push({
+            id: msgId,
+            role: 'summary',
+            content,
+          });
+          break;
+        }
+      }
+    }
+
+    return displayMsgs;
+  }, []);
+
+  /** 刷新显示消息（从当前 session 路径提取） */
+  const refreshDisplay = useCallback(() => {
+    if (sessionRef.current) {
+      setMessages(extractDisplayMessages(sessionRef.current));
+    }
+  }, [extractDisplayMessages]);
+
+  // ============================================================
   // 初始化
+  // ============================================================
+
   useEffect(() => {
+    let extensionLoader: ExtensionLoader | null = null;
+
     try {
       // 1. 加载配置
       const configManager = new ConfigManager();
@@ -86,8 +234,8 @@ export function useAgent(workDir: string): UseAgentReturn {
       registry.register(provider);
       providerRegistryRef.current = registry;
 
-      // 4. 初始化 Session Manager
-      const sessionManager = new SessionManager();
+      // 4. 初始化 Session Manager（注入 Provider 用于 summarize）
+      const sessionManager = new SessionManager(undefined, provider);
       sessionManagerRef.current = sessionManager;
 
       // 5. 创建 Session
@@ -103,8 +251,28 @@ export function useAgent(workDir: string): UseAgentReturn {
       const discoveredSkills = skillLoader.discover();
       setSkills(discoveredSkills);
 
-      // 7. 初始化 Agent
+      // 7. 初始化 Tool Registry
       const toolRegistry = new ToolRegistry();
+      toolRegistryRef.current = toolRegistry;
+
+      // 8. 初始化 Extension Loader（Phase 2 新增）
+      const extensionsDirs = [
+        path.join(workDir, PROJECT_EXTENSIONS_DIR),
+        expandTilde(GLOBAL_EXTENSIONS_DIR),
+      ];
+      extensionLoader = new ExtensionLoader(extensionsDirs, toolRegistry);
+      extensionLoaderRef.current = extensionLoader;
+
+      // 异步加载所有 extensions
+      extensionLoader.loadAll().then((loaded) => {
+        setExtensions(loaded);
+        // 启动文件监听（hot-reload）
+        extensionLoader!.startWatching();
+      }).catch((err) => {
+        console.error('[useAgent] Extension 加载失败:', err);
+      });
+
+      // 9. 初始化 Agent
       const contextBuilder = new ContextBuilder();
       const agent = new Agent(
         provider,
@@ -121,13 +289,16 @@ export function useAgent(workDir: string): UseAgentReturn {
       setCurrentModel(config.defaultModel);
       setCurrentProvider(config.defaultProvider);
 
-      // 8. 加载 session 列表
+      // 10. 加载 session 列表
       setSessionList(sessionManager.list());
 
-      // 9. SIGINT 处理
+      // 11. SIGINT 处理
       const handleSigInt = () => {
         if (sessionRef.current) {
           sessionManager.save(sessionRef.current);
+        }
+        if (extensionLoader) {
+          extensionLoader.stopWatching();
         }
         process.exit(0);
       };
@@ -135,9 +306,11 @@ export function useAgent(workDir: string): UseAgentReturn {
 
       return () => {
         process.off('SIGINT', handleSigInt);
+        if (extensionLoader) {
+          extensionLoader.stopWatching();
+        }
       };
     } catch (err) {
-      // 配置错误在 index.ts 中处理
       console.error(err instanceof Error ? err.message : String(err));
     }
   }, [workDir]);
@@ -148,92 +321,42 @@ export function useAgent(workDir: string): UseAgentReturn {
     return `msg_${messageIdCounter.current}`;
   };
 
+  // ============================================================
+  // 消息发送（树形 Session）
+  // ============================================================
+
   /** 发送消息 */
   const sendMessage = useCallback(async (text: string) => {
     if (!agentRef.current || !sessionRef.current || isProcessing) return;
 
     setIsProcessing(true);
 
-    // 添加用户消息到 UI
-    const userMsg: DisplayMessage = {
-      id: nextMessageId(),
-      role: 'user',
-      content: text,
-    };
-    setMessages((prev) => [...prev, userMsg]);
-
-    // 添加 assistant 消息占位（流式追加）
-    const assistantMsgId = nextMessageId();
-    const assistantMsg: DisplayMessage = {
-      id: assistantMsgId,
-      role: 'assistant',
-      content: '',
-      isStreaming: true,
-    };
-    setMessages((prev) => [...prev, assistantMsg]);
-
     try {
       const stream = agentRef.current.run(sessionRef.current, text);
 
+      // 流式处理：边接收边更新显示
       for await (const event of stream) {
         switch (event.type) {
           case 'text': {
-            // 流式追加文本
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, content: m.content + event.content }
-                  : m,
-              ),
-            );
+            // 流式追加文本 — 从 session 路径重建显示
+            refreshDisplay();
             break;
           }
           case 'tool_call': {
-            // 添加工具调用消息
-            const toolMsgId = nextMessageId();
-            pendingToolMsgIdRef.current = toolMsgId;
-            const toolMsg: DisplayMessage = {
-              id: toolMsgId,
-              role: 'tool',
-              content: '',
-              toolName: event.name,
-              toolParams: event.params,
-            };
-            setMessages((prev) => [...prev, toolMsg]);
+            refreshDisplay();
             break;
           }
           case 'tool_result': {
-            // 更新当前工具的结果（通过 ref 中的 ID 精确匹配）
-            const toolMsgId = pendingToolMsgIdRef.current;
-            if (toolMsgId) {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === toolMsgId
-                    ? { ...m, toolResult: event.result, content: event.result.output }
-                    : m,
-                ),
-              );
-              pendingToolMsgIdRef.current = null;
-            }
+            refreshDisplay();
             break;
           }
           case 'error': {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId
-                  ? { ...m, content: m.content + `\n[错误] ${event.message}`, isStreaming: false }
-                  : m,
-              ),
-            );
+            refreshDisplay();
             break;
           }
           case 'done': {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantMsgId ? { ...m, isStreaming: false } : m,
-              ),
-            );
-            // 更新 token 统计
+            // 最终刷新显示 + 更新 token 统计
+            refreshDisplay();
             setTokenUsage((prev) => ({
               inputTokens: prev.inputTokens + event.usage.inputTokens,
               outputTokens: prev.outputTokens + event.usage.outputTokens,
@@ -245,20 +368,25 @@ export function useAgent(workDir: string): UseAgentReturn {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsgId
-            ? { ...m, content: m.content + `\n[错误] ${message}`, isStreaming: false }
-            : m,
-        ),
-      );
+      refreshDisplay();
+      // 追加错误消息
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: nextMessageId(),
+          role: 'assistant',
+          content: `[错误] ${message}`,
+          isSystem: true,
+        },
+      ]);
     } finally {
-      setMessages((prev) =>
-        prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
-      );
       setIsProcessing(false);
     }
-  }, [isProcessing]);
+  }, [isProcessing, refreshDisplay]);
+
+  // ============================================================
+  // 模型 / Provider 切换
+  // ============================================================
 
   /** 切换模型 */
   const switchModel = useCallback((model: string) => {
@@ -279,8 +407,9 @@ export function useAgent(workDir: string): UseAgentReturn {
       registry.register(newProvider);
       providerRegistryRef.current = registry;
 
-      // 重建 agent
-      const toolRegistry = new ToolRegistry();
+      // 重建 agent（复用 toolRegistry 和 extensionLoader）
+      const toolRegistry = toolRegistryRef.current ?? new ToolRegistry();
+      toolRegistryRef.current = toolRegistry;
       const sessionManager = sessionManagerRef.current!;
       const skillLoader = skillLoaderRef.current!;
       const contextBuilder = new ContextBuilder();
@@ -305,6 +434,10 @@ export function useAgent(workDir: string): UseAgentReturn {
     }
   }, []);
 
+  // ============================================================
+  // Session 管理（树形）
+  // ============================================================
+
   /** 新建 Session */
   const clearSession = useCallback(() => {
     if (!sessionManagerRef.current || !configRef.current) return;
@@ -315,7 +448,7 @@ export function useAgent(workDir: string): UseAgentReturn {
     sessionRef.current = session;
     setMessages([]);
     setTokenUsage({ inputTokens: 0, outputTokens: 0, cost: 0 });
-    refreshSessionList();
+    setSessionList(sessionManagerRef.current.list());
   }, []);
 
   /** 加载历史 Session */
@@ -325,36 +458,128 @@ export function useAgent(workDir: string): UseAgentReturn {
     if (!session) return false;
     sessionRef.current = session;
 
-    // 转换 session 消息为 DisplayMessage
-    const displayMsgs: DisplayMessage[] = session.messages.map((msg, i) => {
-      if (typeof msg.content === 'string') {
-        return {
-          id: `msg_${i}`,
-          role: msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'tool',
-          content: msg.content,
-        };
-      }
-      // ContentBlock[] 格式
-      const blocks = msg.content;
-      const textParts = blocks.filter((b) => b.type === 'text').map((b) => b.text || '');
-      return {
-        id: `msg_${i}`,
-        role: msg.role === 'user' ? 'user' : msg.role === 'assistant' ? 'assistant' : 'tool',
-        content: textParts.join(''),
-      };
-    });
-    setMessages(displayMsgs);
+    // 从树形路径提取显示消息
+    setMessages(extractDisplayMessages(session));
     setCurrentModel(session.model);
     setCurrentProvider(session.provider);
     currentModelRef.current = session.model;
     currentProviderRef.current = session.provider;
     return true;
-  }, []);
+  }, [extractDisplayMessages]);
 
   /** 刷新 Session 列表 */
   const refreshSessionList = useCallback(() => {
     if (!sessionManagerRef.current) return;
     setSessionList(sessionManagerRef.current.list());
+  }, []);
+
+  // ============================================================
+  // Phase 2: 树形操作
+  // ============================================================
+
+  /** Fork 分支 */
+  const forkSession = useCallback((reason?: string): string | null => {
+    if (!sessionManagerRef.current || !sessionRef.current) return null;
+    try {
+      const forkNodeId = sessionManagerRef.current.fork(sessionRef.current, {
+        reason,
+      });
+      sessionManagerRef.current.save(sessionRef.current);
+      return forkNodeId;
+    } catch (err) {
+      console.error('Fork 失败:', err);
+      return null;
+    }
+  }, []);
+
+  /** 回退到指定节点 */
+  const rollbackSession = useCallback((nodeId: string): boolean => {
+    if (!sessionManagerRef.current || !sessionRef.current) return false;
+    try {
+      sessionManagerRef.current.rollback(sessionRef.current, nodeId);
+      sessionManagerRef.current.save(sessionRef.current);
+      refreshDisplay();
+      return true;
+    } catch (err) {
+      console.error('Rollback 失败:', err);
+      return false;
+    }
+  }, [refreshDisplay]);
+
+  /** 跳转到指定分支 */
+  const jumpToBranch = useCallback((nodeId: string): boolean => {
+    if (!sessionManagerRef.current || !sessionRef.current) return false;
+    try {
+      sessionManagerRef.current.jump(sessionRef.current, nodeId);
+      sessionManagerRef.current.save(sessionRef.current);
+      refreshDisplay();
+      return true;
+    } catch (err) {
+      console.error('Jump 失败:', err);
+      return false;
+    }
+  }, [refreshDisplay]);
+
+  /** 生成分支摘要 */
+  const summarizeBranch = useCallback(async (branchNodeId?: string): Promise<string | null> => {
+    if (!sessionManagerRef.current || !sessionRef.current) return null;
+    try {
+      const targetNodeId = branchNodeId ?? sessionRef.current.currentNodeId;
+      const summaryNodeId = await sessionManagerRef.current.summarize(
+        sessionRef.current,
+        targetNodeId,
+      );
+      sessionManagerRef.current.save(sessionRef.current);
+      refreshDisplay();
+      return summaryNodeId;
+    } catch (err) {
+      console.error('Summarize 失败:', err);
+      return null;
+    }
+  }, [refreshDisplay]);
+
+  /** 获取树结构 */
+  const getTree = useCallback((): TreeStructure | null => {
+    if (!sessionManagerRef.current || !sessionRef.current) return null;
+    if (!sessionRef.current.rootId) return null;
+    return sessionManagerRef.current.getTree(sessionRef.current);
+  }, []);
+
+  /** 获取所有节点 Map（供 TreeView 使用） */
+  const getNodes = useCallback((): Record<string, SessionNode> => {
+    return sessionRef.current?.nodes ?? {};
+  }, []);
+
+  /** 列出所有分支 */
+  const listBranches = useCallback((): BranchInfo[] => {
+    if (!sessionManagerRef.current || !sessionRef.current) return [];
+    if (!sessionRef.current.rootId) return [];
+    return sessionManagerRef.current.listBranches(sessionRef.current);
+  }, []);
+
+  /** 获取当前节点 ID */
+  const getCurrentNodeId = useCallback((): string => {
+    return sessionRef.current?.currentNodeId ?? '';
+  }, []);
+
+  // ============================================================
+  // Phase 2: Extensions
+  // ============================================================
+
+  /** 刷新 extensions 列表 */
+  const refreshExtensions = useCallback(() => {
+    if (!extensionLoaderRef.current) return;
+    setExtensions(extensionLoaderRef.current.listLoaded());
+  }, []);
+
+  // ============================================================
+  // Phase 2: Skill 执行历史
+  // ============================================================
+
+  /** 获取 Skill 执行历史 */
+  const getSkillHistory = useCallback((skillName: string, limit = 10): SkillExecutionRecord[] => {
+    if (!skillLoaderRef.current) return [];
+    return skillLoaderRef.current.getExecutionHistory(skillName, { limit });
   }, []);
 
   return {
@@ -364,6 +589,7 @@ export function useAgent(workDir: string): UseAgentReturn {
     currentProvider,
     tokenUsage,
     skills,
+    extensions,
     sendMessage,
     switchModel,
     switchProvider,
@@ -372,5 +598,17 @@ export function useAgent(workDir: string): UseAgentReturn {
     sessionList,
     refreshSessionList,
     config: configRef.current,
+    // Phase 2
+    forkSession,
+    rollbackSession,
+    jumpToBranch,
+    summarizeBranch,
+    getTree,
+    getNodes,
+    listBranches,
+    getCurrentNodeId,
+    refreshExtensions,
+    getSkillHistory,
+    refreshDisplay,
   };
 }

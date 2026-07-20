@@ -1,5 +1,6 @@
 import * as os from 'os';
 import * as path from 'path';
+import type { SessionNode } from './types.js';
 
 /**
  * 生成唯一 ID
@@ -86,4 +87,34 @@ export function isPathWithin(targetPath: string, dirPath: string): boolean {
  */
 export function nowISO(): string {
   return new Date().toISOString();
+}
+
+// ============ Phase 2 新增工具函数 ============
+
+/**
+ * 从扁平节点 Map 中提取从 root 到目标节点的路径
+ * @param nodes - 扁平节点 Map
+ * @param rootId - 根节点 ID
+ * @param targetId - 目标节点 ID
+ * @returns 从 root 到 target 的节点数组（有序）
+ */
+export function getPathFromRoot(
+  nodes: Record<string, SessionNode>,
+  rootId: string,
+  targetId: string,
+): SessionNode[] {
+  if (!rootId || !targetId || !nodes[targetId]) {
+    return [];
+  }
+
+  const path: SessionNode[] = [];
+  let currentId: string | null = targetId;
+
+  while (currentId && nodes[currentId]) {
+    path.unshift(nodes[currentId]);
+    if (currentId === rootId) break;
+    currentId = nodes[currentId].parentId;
+  }
+
+  return path;
 }

@@ -99,6 +99,27 @@ export function MessageList({ messages }: MessageListProps): React.ReactElement 
           );
         }
 
+        // 摘要消息
+        if (msg.role === 'summary') {
+          return (
+            <Box key={msg.id} marginBottom={1} flexDirection="column">
+              <Text>
+                {chalk.magenta('📝 Summary:')} {chalk.gray('(分支摘要)')}
+              </Text>
+              <Text color="gray">{renderMarkdown(msg.content)}</Text>
+            </Box>
+          );
+        }
+
+        // 系统消息（命令输出等）
+        if (msg.isSystem) {
+          return (
+            <Box key={msg.id} marginBottom={1}>
+              <Text color="yellow">{'⚡ '}{msg.content}</Text>
+            </Box>
+          );
+        }
+
         // Assistant 消息
         const rendered = renderMarkdown(msg.content);
         return (

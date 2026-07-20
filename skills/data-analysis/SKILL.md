@@ -2,6 +2,7 @@
 name: data-analysis
 description: 科研数据分析技能，涵盖统计检验方法选择、Python 分析脚本模板、数据可视化和数据清洗流程
 version: 1
+lastUpdated: 2025-01-15
 ---
 
 # Data Analysis Skill

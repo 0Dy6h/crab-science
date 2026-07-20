@@ -1,0 +1,293 @@
+%% Crab-Science Phase 2 — 程序调用流程（序列图）
+%% 作者：高见远（架构师）
+
+%% ========== 1. Agent Loop 在树形 Session 上的工作流 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant A as Agent
+    participant CB as ContextBuilder
+    participant SM as SessionManager
+    participant P as LLMProvider
+    participant TR as ToolRegistry
+
+    U->>CLI: 输入消息 "帮我检索 CRISPR 文献"
+    CLI->>A: run(session, userInput)
+
+    Note over A: === Agent Loop 开始 ===
+
+    A->>SM: addNode(session, { type: 'user', content: userInput })
+    Note over SM: 新节点作为 currentNodeId 的子节点<br/>currentNodeId 更新为新节点
+
+    loop 最多 maxIterations 次
+        A->>CB: build(session, skills, config)
+        CB->>CB: extractPathMessages(session)
+        Note over CB: 从 root → currentNodeId<br/>路径提取 Message[]
+        CB-->>A: { systemPrompt, messages }
+
+        A->>P: complete(messages, { model, tools, systemPrompt })
+        P-->>A: AsyncGenerator<StreamEvent>
+
+        loop 流式事件处理
+            P-->>A: StreamEvent
+            alt text_delta
+                A-->>CLI: yield { type: 'text', content }
+            else tool_call_start
+                A-->>CLI: yield { type: 'tool_call', name, params }
+            else tool_call_end
+                Note over A: 收集到 pendingToolCalls[]
+            else message_end
+                Note over A: 记录 TokenUsage
+            end
+        end
+
+        alt 存在工具调用
+            Note over A: 构建 assistant 消息 (含 tool_use blocks)
+            A->>SM: addNode(session, { type: 'assistant', content: assistantBlocks })
+            loop 每个工具调用（串行）
+                A->>TR: execute(toolName, params, ctx)
+                TR-->>A: ToolResult
+                A-->>CLI: yield { type: 'tool_result', name, result }
+                A->>SM: addNode(session, { type: 'tool_result', content: result.output, metadata: { toolCallId, isError } })
+                Note over SM: 工具结果作为当前节点的子节点
+            end
+            Note over A: 继续下一轮循环
+        else 无工具调用
+            A->>SM: addNode(session, { type: 'assistant', content: response })
+            A->>SM: save(session)
+            A-->>CLI: yield { type: 'done', usage }
+        end
+    end
+
+    Note over A: === Agent Loop 结束 ===
+    CLI-->>U: 等待下一次输入
+
+
+%% ========== 2. Fork / Rollback / Jump / Summarize 流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant CH as CommandHandler
+    participant SM as SessionManager
+    participant TU as TreeUtils
+    participant P as LLMProvider
+
+    Note over U,SM: === Fork 分支 ===
+    U->>CLI: /branch 探索方案A
+    CLI->>CH: handle("/branch 探索方案A")
+    CH->>SM: fork(session, { reason: "探索方案A" })
+    Note over SM: currentNodeId 不变<br/>后续 addNode 将作为 currentNodeId 的子节点<br/>与已有子节点形成分支
+    SM-->>CH: 成功
+    CH-->>CLI: "✅ 已 fork 新分支: 探索方案A"
+    CLI-->>U: 显示分支确认
+
+    Note over U,SM: === Rollback 回退 ===
+    U->>CLI: /rollback msg_004
+    CLI->>CH: handle("/rollback msg_004")
+    CH->>SM: rollback(session, "msg_004")
+    Note over SM: currentNodeId = "msg_004"<br/>原路径子节点保留<br/>后续 addNode 追加为 msg_004 的新子节点
+    SM-->>CH: 成功
+    CH-->>CLI: "✅ 已回退到 msg_004，原路径已保留"
+    CLI-->>U: 显示回退确认
+
+    Note over U,SM: === Jump 跳转 ===
+    U->>CLI: /jump
+    CLI->>CH: handle("/jump")
+    CH->>SM: listBranches(session)
+    SM->>TU: findBranches(nodes, rootId)
+    TU-->>SM: BranchInfo[]
+    SM-->>CH: 分支列表
+    CH-->>CLI: 显示分支列表
+    U->>CLI: 选择分支 2
+    CLI->>SM: jump(session, branchLeafNodeId)
+    Note over SM: currentNodeId = 目标分支叶节点
+    SM-->>CLI: 跳转成功
+    CLI-->>U: 显示跳转确认
+
+    Note over U,SM: === Summarize 摘要 ===
+    U->>CLI: /summarize branch_003
+    CLI->>CH: handle("/summarize branch_003")
+    CH->>SM: summarize(session, "branch_leaf_003", undefined, provider)
+    SM->>TU: getPath(nodes, rootId, "branch_leaf_003")
+    TU-->>SM: SessionNode[] (路径节点)
+    SM->>SM: 拼接路径消息为 summary prompt
+    SM->>P: complete(summaryPrompt, { model })
+    P-->>SM: 摘要文本
+    SM->>SM: 创建 summary 节点 (type='summary', metadata.summaryText=摘要, metadata.sourceBranchLeafId=branch_leaf_003)
+    SM->>SM: addNode(session, summaryNode)
+    SM-->>CH: 摘要节点 ID
+    CH-->>CLI: "✅ 摘要已合并到当前分支"
+    CLI-->>U: 显示摘要内容
+
+
+%% ========== 3. Extension Hot-Reload 流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant EL as ExtensionLoader
+    participant ES as esbuild
+    participant TR as ToolRegistry
+    participant FW as chokidar (FileWatcher)
+
+    Note over U,FW: === 初始加载 ===
+    CLI->>EL: loadAll()
+    EL->>EL: 扫描 extensions/ 目录
+    loop 每个 .ts 文件
+        EL->>ES: build({ entryPoints: [file], format: 'cjs', write: false })
+        ES-->>EL: 编译后代码 (string)
+        EL->>EL: loadModule(code) → ExtensionModule
+        alt module.tool 存在
+            EL->>TR: register(tool)
+            Note over TR: extension 工具注册成功
+        end
+    end
+    EL-->>CLI: LoadedExtension[]
+
+    Note over U,FW: === 启动 Hot-Reload 监听 ===
+    CLI->>EL: startWatching()
+    EL->>FW: watch(extensionsDirs, { ignoreInitial: true })
+    FW-->>EL: ready
+
+    Note over U,FW: === 用户修改 extension 文件 ===
+    U->>U: 编辑 extensions/web-search.ts
+
+    FW-->>EL: change event (filePath: web-search.ts)
+    EL->>EL: unload(filePath)
+    EL->>TR: unregister("web-search")
+    Note over TR: 旧工具已移除
+
+    EL->>ES: build({ entryPoints: [filePath], format: 'cjs', write: false })
+    ES-->>EL: 新编译代码
+    EL->>EL: loadModule(code) → new ExtensionModule
+    EL->>TR: register(newTool)
+    Note over TR: 新工具注册成功
+
+    EL-->>CLI: hot-reload 完成
+    CLI-->>U: "↻ extension web-search 已重新加载"
+
+    Note over U,FW: === 编译错误场景 ===
+    U->>U: 编辑 extensions/arxiv-search.ts (引入语法错误)
+    FW-->>EL: change event
+    EL->>ES: build(...)
+    ES-->>EL: 编译错误
+    EL->>EL: 记录 status='error', error=错误信息
+    Note over EL: 不 unregister 旧工具（保持可用）<br/>不影响其他 extension
+    EL-->>CLI: "⚠ extension arxiv-search 编译失败: ..."
+    CLI-->>U: 显示错误提示
+
+
+%% ========== 4. Phase 1 Session 向后兼容迁移流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant SM as SessionManager
+    participant TU as TreeUtils
+    participant FS as 文件系统
+
+    U->>CLI: /session load sess_20260720_old
+    CLI->>SM: load("sess_20260720_old")
+    SM->>FS: 读取 sessions/sess_20260720_old.json
+    FS-->>SM: JSON 内容
+
+    SM->>SM: JSON.parse → sessionObj
+    SM->>SM: 检测 sessionObj.version
+
+    alt version === 1 或存在 messages 字段 (Phase 1 线性)
+        Note over SM: 触发 V1 → V2 迁移
+        SM->>TU: messagesToNodes(sessionObj.messages)
+        TU->>TU: 遍历 messages[]
+        loop 每条 message
+            TU->>TU: 创建 SessionNode<br/>id = generateId('node')<br/>parentId = 前一个节点 id<br/>type = message.role<br/>content = message.content<br/>childrenIds = [下一个节点 id]
+        end
+        TU-->>SM: { nodes: Record, rootId, leafId }
+        SM->>SM: 构建 Session(V2)<br/>nodes = 迁移结果<br/>rootId = 第一条消息节点<br/>currentNodeId = 最后一条消息节点<br/>version = 2<br/>保留 model, provider, createdAt 等
+        SM->>FS: 保存迁移后的 Session（覆盖原文件）
+        SM-->>CLI: Session (V2 树形)
+        CLI-->>U: "✅ 已加载 Session (已从 V1 迁移到 V2，15 个节点)"
+    else version === 2 (Phase 2 树形)
+        SM-->>CLI: Session (V2，直接使用)
+        CLI-->>U: "✅ 已加载 Session (15 个节点)"
+    end
+
+
+%% ========== 5. Skill Level 2/3 加载与执行记录流程 ==========
+
+sequenceDiagram
+    participant A as Agent
+    participant SL as SkillLoader
+    participant SEL as SkillExecutionLogger
+    participant TR as ToolRegistry
+    participant FS as 文件系统
+
+    Note over A,FS: === Level 1: 加载 SKILL.md ===
+    A->>TR: execute("read", { path: "skills/literature-search/SKILL.md" })
+    Note over A: Agent 通过 read 工具加载 SKILL.md<br/>SKILL.md 中引用了附加文件和脚本
+
+    Note over A,FS: === Level 2: 加载附加文件 ===
+    A->>TR: execute("read", { path: "skills/literature-search/search-strategy.md" })
+    Note over A: Agent 通过 read 工具按需加载附加文件<br/>SkillLoader.listAttachments() 可列出可用文件
+
+    Note over A,FS: === Level 3: 执行脚本 ===
+    A->>TR: execute("bash", { command: "python skills/literature-search/search.py --query CRISPR" })
+    Note over A: Agent 通过 bash 工具执行脚本<br/>SkillLoader.getScriptPath() 可提供脚本路径
+
+    Note over A,SEL: === 执行记录 ===
+    A->>SL: recordExecution({ skillName: "literature-search", task: "检索CRISPR文献", steps: ["加载SKILL.md", "加载search-strategy.md", "执行search.py"], durationMs: 15200, status: "success" })
+    SL->>SEL: log("literature-search", record)
+    SEL->>FS: 追加写入 skills/literature-search/executions.jsonl
+    Note over FS: {"id":"exec_...","skillName":"literature-search",...}
+    FS-->>SEL: 写入成功
+
+    Note over A,SEL: === 查询执行历史 ===
+    A->>SL: getExecutionHistory("literature-search", { limit: 10 })
+    SL->>SEL: query("literature-search", { limit: 10 })
+    SEL->>FS: 读取 skills/literature-search/executions.jsonl
+    FS-->>SEL: JSONL 内容
+    SEL->>SEL: 逐行解析 JSON → SkillExecutionRecord[]
+    SEL-->>SL: 执行记录列表
+    SL-->>A: SkillExecutionRecord[]
+
+
+%% ========== 6. CLI 启动流程（Phase 2，含 Extension 初始化） ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI (index.ts)
+    participant CM as ConfigManager
+    participant SL as SkillLoader
+    participant SM as SessionManager
+    participant EL as ExtensionLoader
+    participant TR as ToolRegistry
+
+    U->>CLI: npx crab-science
+    CLI->>CM: load() + validate()
+    CM-->>CLI: AppConfig
+
+    CLI->>CM: getApiKey(provider)
+    CM-->>CLI: apiKey
+
+    CLI->>SL: discover()
+    SL->>SL: 扫描 skills/ 目录
+    SL-->>CLI: SkillMeta[] (6 个 skill)
+
+    CLI->>SM: create(options)
+    SM-->>CLI: Session (V2 树形)
+
+    Note over CLI,EL: === Phase 2 新增: Extension 初始化 ===
+    CLI->>TR: new ToolRegistry()
+    CLI->>EL: new ExtensionLoader([extensionsDir, globalDir], toolRegistry)
+    CLI->>EL: loadAll()
+    EL->>EL: 编译 + 加载所有 .ts extension
+    EL->>TR: 注册 web-search, arxiv-search 工具
+    EL-->>CLI: LoadedExtension[]
+
+    CLI->>EL: startWatching()
+    Note over EL: chokidar 开始监听 extensions 目录
+
+    CLI->>CLI: 初始化 Agent (注入 provider, toolRegistry, sessionManager, skillLoader, contextBuilder, config)
+    CLI->>CLI: 渲染 Ink App
+    CLI-->>U: 显示就绪状态 (6 skills + 2 extensions)

@@ -1,5 +1,6 @@
 // ============================================================
 // Crab-Science 全局常量
+// Phase 2: 新增 Extensions 和 Tree 相关常量
 // ============================================================
 
 /** 默认最大迭代次数 */
@@ -32,6 +33,23 @@ export const GLOBAL_SKILLS_DIR = '~/.crab-science/skills';
 /** 项目级 Skills 目录名（相对于项目根） */
 export const PROJECT_SKILLS_DIR = 'skills';
 
+// ============ Phase 2 新增常量 ============
+
+/** 全局 Extensions 目录 */
+export const GLOBAL_EXTENSIONS_DIR = '~/.crab-science/extensions';
+
+/** 项目级 Extensions 目录名（相对于项目根） */
+export const PROJECT_EXTENSIONS_DIR = 'extensions';
+
+/** /tree 命令折叠阈值（超过此数量的分支折叠显示） */
+export const MAX_TREE_DISPLAY_BRANCHES = 2;
+
+/** Skill 附加文件 glob 模式（排除 SKILL.md） */
+export const SKILL_ATTACHMENTS_GLOB = '*.md';
+
+/** Skill 脚本 glob 模式 */
+export const SKILL_SCRIPTS_GLOB = '*.{py,sh}';
+
 /** 系统提示词最大 token 数 */
 export const MAX_SYSTEM_PROMPT_TOKENS = 1500;
 
@@ -48,4 +66,4 @@ export const GLOB_PREVIEW_LINES = 10;
 export const ENV_KEY_PREFIX = 'CRAB_SCIENCE';
 
 /** 版本号 */
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';

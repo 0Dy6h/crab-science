@@ -2,6 +2,7 @@
 name: paper-writing
 description: 论文撰写辅助技能，提供 IMRaD 结构模板、各部分撰写指南、LaTeX 格式建议和引用管理方法
 version: 1
+lastUpdated: 2025-01-15
 ---
 
 # Paper Writing Skill

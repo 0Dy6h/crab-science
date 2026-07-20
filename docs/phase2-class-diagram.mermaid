@@ -1,0 +1,318 @@
+%% Crab-Science Phase 2 — 类图
+%% 作者：高见远（架构师）
+
+classDiagram
+    direction TB
+
+    %% ========== shared 包（Phase 2 变更） ==========
+
+    class SessionNode {
+        +id: string
+        +parentId: string | null
+        +type: NodeType
+        +content: string | ContentBlock[]
+        +timestamp: string
+        +childrenIds: string[]
+        +metadata: NodeMetadata
+    }
+
+    class NodeType {
+        <<union type>>
+        user
+        assistant
+        tool_call
+        tool_result
+        summary
+    }
+
+    class NodeMetadata {
+        +toolName?: string
+        +toolParams?: Record
+        +toolResult?: string
+        +isError?: boolean
+        +toolCallId?: string
+        +sourceBranchLeafId?: string
+        +summaryText?: string
+        +branchReason?: string
+        +tokensUsed?: object
+    }
+
+    class Session {
+        +id: string
+        +nodes: Record~string, SessionNode~
+        +rootId: string
+        +currentNodeId: string
+        +model: string
+        +provider: string
+        +createdAt: string
+        +updatedAt: string
+        +totalInputTokens: number
+        +totalOutputTokens: number
+        +totalCost: number
+        +version: number
+    }
+
+    class SessionMeta {
+        +id: string
+        +createdAt: string
+        +updatedAt: string
+        +model: string
+        +provider: string
+        +nodeCount: number
+        +version: number
+    }
+
+    class SkillMeta {
+        +name: string
+        +description: string
+        +version: number
+        +lastUpdated?: string
+        +executionCount?: number
+    }
+
+    class SkillAttachment {
+        +name: string
+        +path: string
+        +size: number
+    }
+
+    class SkillScript {
+        +name: string
+        +path: string
+        +language: 'python' | 'shell'
+    }
+
+    class SkillExecutionRecord {
+        +id: string
+        +skillName: string
+        +timestamp: string
+        +task: string
+        +steps: string[]
+        +durationMs: number
+        +status: 'success' | 'failed' | 'partial'
+        +error?: string
+        +tokenUsage?: object
+    }
+
+    class ExtensionModule {
+        +tool?: ExtensionTool
+        +command?: ExtensionCommand
+    }
+
+    class ExtensionTool {
+        +name: string
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params, ctx): Promise~ToolResult~
+    }
+
+    class LoadedExtension {
+        +filePath: string
+        +name: string
+        +module: ExtensionModule
+        +status: 'loaded' | 'error'
+        +error?: string
+        +loadedAt: string
+    }
+
+    class ForkOptions {
+        +fromNodeId?: string
+        +reason?: string
+    }
+
+    %% ========== agent-core 包 ==========
+
+    class SessionManager {
+        -sessionsDir: string
+        -provider?: LLMProvider
+        +create(options): Session
+        +load(id): Session | null
+        +save(session): void
+        +list(): SessionMeta[]
+        +delete(id): void
+        +addNode(session, node): string
+        +updateUsage(session, input, output, cost): void
+        +getSummary(session, maxNodes?): string
+        +fork(session, options?): string
+        +rollback(session, nodeId): void
+        +jump(session, nodeId): void
+        +summarize(session, branchNodeId, targetNodeId?, provider?): Promise~string~
+        +getPath(session, nodeId): SessionNode[]
+        +getTree(session): TreeStructure
+        +listBranches(session): BranchInfo[]
+        +getCurrentPathMessages(session): Message[]
+        -migrateFromV1(session): Session
+    }
+
+    class TreeUtils {
+        <<utility>>
+        +getPath(nodes, rootId, nodeId): SessionNode[]
+        +getDepth(nodes, nodeId): number
+        +getLeafNodes(nodes, rootId): SessionNode[]
+        +findBranches(nodes, rootId): BranchInfo[]
+        +nodeToMessage(node): Message | null
+        +messagesToNodes(messages): Record~string, SessionNode~
+    }
+
+    class SkillLoader {
+        -skillsDirs: string[]
+        -cache: Map~string, Skill~
+        -executionLogger: SkillExecutionLogger
+        +discover(): SkillMeta[]
+        +load(name): Skill | null
+        +getMetadataForPrompt(): string
+        +getSkillPath(name): string | null
+        +clearCache(): void
+        +loadAttachment(skillName, fileName): string | null
+        +getScriptPath(skillName, scriptName): string | null
+        +listAttachments(skillName): SkillAttachment[]
+        +listScripts(skillName): SkillScript[]
+        +getEnhancedMeta(skillName): EnhancedSkillMeta | null
+        +recordExecution(record): void
+        +getExecutionHistory(skillName, options?): SkillExecutionRecord[]
+    }
+
+    class SkillExecutionLogger {
+        -logDir: string
+        +log(skillName, record): void
+        +query(skillName, options?): SkillExecutionRecord[]
+        -getLogPath(skillName): string
+    }
+
+    class ExtensionLoader {
+        -extensionsDirs: string[]
+        -toolRegistry: ToolRegistry
+        -loaded: Map~string, LoadedExtension~
+        -watcher?: FSWatcher
+        +loadAll(): LoadedExtension[]
+        +reload(filePath): LoadedExtension | null
+        +unload(filePath): void
+        +startWatching(): void
+        +stopWatching(): void
+        +listLoaded(): LoadedExtension[]
+        -compileExtension(filePath): Promise~string~
+        -loadModule(code, filePath): ExtensionModule
+        -registerTool(tool): void
+        -unregisterTool(name): void
+    }
+
+    class ContextBuilder {
+        -systemPromptBuilder: SystemPromptBuilder
+        +build(session, skills, config): BuildResult
+        -extractPathMessages(session): Message[]
+    }
+
+    class SystemPromptBuilder {
+        +build(skills, config): string
+        -buildRole(): string
+        -buildToolDescriptions(extensions?): string
+        -buildSkillMetadata(skills): string
+        -buildPrinciples(config): string
+        -trimPrompt(parts, skills, config): string
+    }
+
+    class Agent {
+        -provider: LLMProvider
+        -toolRegistry: ToolRegistry
+        -sessionManager: SessionManager
+        -skillLoader: SkillLoader
+        -contextBuilder: ContextBuilder
+        -config: AppConfig
+        +run(session, userInput): AsyncGenerator~AgentEvent~
+    }
+
+    class ToolRegistry {
+        -tools: Map~string, Tool~
+        +register(tool): void
+        +unregister(name): void
+        +get(name): Tool
+        +getDefinitions(): ToolDefinition[]
+        +execute(name, params, ctx): Promise~ToolResult~
+    }
+
+    %% ========== Phase 1 保留类型 ==========
+
+    class Message {
+        +role: MessageRole
+        +content: string | ContentBlock[]
+        +toolCallId?: string
+    }
+
+    class ContentBlock {
+        +type: 'text' | 'tool_use' | 'tool_result'
+        +text?: string
+        +toolCallId?: string
+        +toolName?: string
+        +input?: Record
+        +output?: string
+        +isError?: boolean
+    }
+
+    class ToolDefinition {
+        +name: string
+        +description: string
+        +parameters: ToolParameterSchema
+    }
+
+    class ToolResult {
+        +success: boolean
+        +output: string
+        +error?: string
+    }
+
+    class ToolContext {
+        +workDir: string
+        +sessionId: string
+    }
+
+    class Skill {
+        +meta: SkillMeta
+        +path: string
+        +content: string
+    }
+
+    class AppConfig {
+        +defaultProvider: string
+        +defaultModel: string
+        +maxIterations: number
+        +bashTimeoutMs: number
+        +workDir: string
+    }
+
+    %% ========== 关系 ==========
+
+    Session "1" --> "*" SessionNode : nodes
+    SessionNode --> NodeMetadata
+    SessionNode --> NodeType
+
+    SessionManager "1" --> "*" Session : manages
+    SessionManager ..> TreeUtils : uses
+    SessionManager ..> LLMProvider : summarize
+    SessionManager ..> SessionMeta : returns
+    SessionManager ..> ForkOptions : receives
+
+    SkillLoader --> SkillExecutionLogger : delegates
+    SkillLoader ..> SkillAttachment : lists
+    SkillLoader ..> SkillScript : lists
+    SkillExecutionLogger ..> SkillExecutionRecord : logs/queries
+    Skill --> SkillMeta
+
+    ExtensionLoader "1" --> "*" LoadedExtension : manages
+    ExtensionLoader --> ToolRegistry : registers/unregisters
+    LoadedExtension --> ExtensionModule
+    ExtensionModule --> ExtensionTool : exports
+
+    ContextBuilder ..> Session : reads path
+    ContextBuilder ..> Message : produces
+    ContextBuilder --> SystemPromptBuilder : delegates
+
+    Agent --> SessionManager : addNode
+    Agent --> ContextBuilder : build
+    Agent --> ToolRegistry : execute
+    Agent --> SkillLoader : discover/load
+
+    ToolRegistry "1" --> "*" Tool : manages
+    ToolRegistry ..> ToolDefinition : produces
+    ToolRegistry ..> ToolResult : returns
+
+    Message "1" --> "*" ContentBlock : content

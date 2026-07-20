@@ -35,3 +35,7 @@ coverage/
 
 # WorkBuddy workspace
 .workbuddy/
+
+# Temp files
+_tmp_*
+tsup.config.bundled_*.mjs

@@ -5,8 +5,9 @@ import type {
   ToolResult,
   TokenUsage,
   AppConfig,
+  ToolDefinition,
 } from '@crab-science/shared';
-import type { LLMProvider, LLMOptions, StreamEvent } from '@crab-science/llm-layer';
+import type { LLMProvider, LLMOptions } from '@crab-science/llm-layer';
 import type { ToolRegistry } from './tools/index.js';
 import type { SkillLoader } from './skills/loader.js';
 import { ContextBuilder } from './context-builder.js';
@@ -30,15 +31,18 @@ interface PendingToolCall {
   input: Record<string, unknown>;
 }
 
+/** 内置工具名称集合（用于区分 extension 工具） */
+const BUILTIN_TOOL_NAMES = new Set(['read', 'write', 'edit', 'bash']);
+
 /**
- * Agent — 核心循环
+ * Agent — 核心循环（Phase 2 树形 Session 适配）
  *
  * 职责：
- * 1. 构建上下文（系统提示 + 历史 + skills 元数据）
+ * 1. 构建上下文（系统提示 + 当前路径消息 + skills 元数据 + extension 工具）
  * 2. 调用 LLM 流式获取响应
  * 3. 解析流式事件，yield AgentEvent 给 CLI
  * 4. 收集工具调用，串行执行
- * 5. 将工具结果回注 session，进入下一轮
+ * 5. 将工具结果回注 session（树形节点），进入下一轮
  * 6. 无工具调用时结束循环
  */
 export class Agent {
@@ -53,15 +57,16 @@ export class Agent {
 
   /**
    * 运行 Agent 循环
-   * @param session - 当前 Session
+   * @param session - 当前 Session（树形）
    * @param userInput - 用户输入文本
    * @returns AsyncGenerator<AgentEvent>
    */
   async *run(session: Session, userInput: string): AsyncGenerator<AgentEvent> {
-    // 1. 添加用户消息
-    this.sessionManager.addMessage(session, {
-      role: 'user',
+    // 1. 添加用户消息节点
+    this.sessionManager.addNode(session, {
+      type: 'user',
       content: userInput,
+      metadata: {},
     });
 
     let iterationCount = 0;
@@ -70,9 +75,18 @@ export class Agent {
     while (iterationCount < maxIterations) {
       iterationCount++;
 
-      // 2. 构建 context
+      // 2. 构建 context（从当前路径提取消息 + extension 工具描述）
       const skills = this.skillLoader.discover();
-      const { systemPrompt, messages } = this.contextBuilder.build(session, skills, this.config);
+      const allTools = this.toolRegistry.getDefinitions();
+      const extensionTools = allTools.filter(
+        (t) => !BUILTIN_TOOL_NAMES.has(t.name),
+      );
+      const { systemPrompt, messages } = this.contextBuilder.build(
+        session,
+        skills,
+        this.config,
+        extensionTools,
+      );
 
       // 3. 构建 LLM 调用选项
       const options: LLMOptions = {
@@ -86,7 +100,6 @@ export class Agent {
       // 4. 调用 LLM 流式获取响应
       const textParts: string[] = [];
       const pendingToolCalls: PendingToolCall[] = [];
-      // 用 Map 记录 toolCallId → toolName（从 tool_call_start 事件获取）
       const toolNameMap = new Map<string, string>();
       let usage: TokenUsage = { inputTokens: 0, outputTokens: 0, cost: 0 };
 
@@ -101,7 +114,6 @@ export class Agent {
               break;
             }
             case 'tool_call_start': {
-              // 记录工具名，等待 tool_call_end 时关联
               toolNameMap.set(event.toolCallId, event.toolName);
               break;
             }
@@ -132,36 +144,36 @@ export class Agent {
       }
 
       // 更新 session token 统计
-      this.sessionManager.updateUsage(session, usage.inputTokens, usage.outputTokens, usage.cost);
+      this.sessionManager.updateUsage(
+        session,
+        usage.inputTokens,
+        usage.outputTokens,
+        usage.cost,
+      );
 
-      // 5. 构建 assistant 消息（包含 text + tool_use blocks）
-      const assistantBlocks: ContentBlock[] = [];
+      // 5. 添加 assistant 消息节点（文本部分）
       if (textParts.length > 0) {
-        assistantBlocks.push({ type: 'text', text: textParts.join('') });
-      }
-      for (const tc of pendingToolCalls) {
-        assistantBlocks.push({
-          type: 'tool_use',
-          toolCallId: tc.id,
-          toolName: tc.name,
-          input: tc.input,
-        });
-      }
-
-      // 添加 assistant 消息到 session
-      if (assistantBlocks.length > 0) {
-        this.sessionManager.addMessage(session, {
-          role: 'assistant',
-          content: assistantBlocks,
-        });
-      } else if (textParts.length > 0) {
-        this.sessionManager.addMessage(session, {
-          role: 'assistant',
+        this.sessionManager.addNode(session, {
+          type: 'assistant',
           content: textParts.join(''),
+          metadata: {},
         });
       }
 
-      // 6. 检查是否有工具调用
+      // 6. 添加 tool_call 节点
+      for (const tc of pendingToolCalls) {
+        this.sessionManager.addNode(session, {
+          type: 'tool_call',
+          content: '',
+          metadata: {
+            toolName: tc.name,
+            toolParams: tc.input,
+            toolCallId: tc.id,
+          },
+        });
+      }
+
+      // 7. 检查是否有工具调用
       if (pendingToolCalls.length === 0) {
         // 无工具调用 → 循环结束
         this.sessionManager.save(session);
@@ -169,7 +181,7 @@ export class Agent {
         return;
       }
 
-      // 7. 串行执行工具调用
+      // 8. 串行执行工具调用
       for (const tc of pendingToolCalls) {
         yield {
           type: 'tool_call',
@@ -189,11 +201,15 @@ export class Agent {
           result,
         };
 
-        // 将工具结果回注到 session
-        this.sessionManager.addMessage(session, {
-          role: 'tool',
+        // 将工具结果回注到 session（树形节点）
+        this.sessionManager.addNode(session, {
+          type: 'tool_result',
           content: result.output,
-          toolCallId: tc.id,
+          metadata: {
+            toolCallId: tc.id,
+            isError: !result.success,
+            toolResult: result.output,
+          },
         });
       }
 
