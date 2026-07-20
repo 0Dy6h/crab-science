@@ -1,0 +1,30 @@
+{
+  "name": "@crab-science/llm-layer",
+  "version": "0.1.0",
+  "description": "Crab-Science LLM Provider 抽象层（OpenAI + Anthropic）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@crab-science/shared": "workspace:*",
+    "openai": "^4.55.0",
+    "@anthropic-ai/sdk": "^0.27.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsup": "^8.2.0"
+  }
+}

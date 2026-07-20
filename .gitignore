@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Turbo cache
+.turbo/
+
+# Config (local)
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Crab-Science runtime
+~/.crab-science/
+sessions/
+*.session.json
+
+# Test coverage
+coverage/
+*.lcov
+
+# WorkBuddy workspace
+.workbuddy/

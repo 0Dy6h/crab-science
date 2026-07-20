@@ -1,0 +1,259 @@
+%% Crab-Science Phase 1 — 程序调用流程（序列图）
+%% 作者：高见远（架构师）
+
+%% ========== 1. CLI 启动流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI (index.ts)
+    participant CM as ConfigManager
+    participant SL as SkillLoader
+    participant PR as ProviderRegistry
+    participant SM as SessionManager
+
+    U->>CLI: npx crab-science [--workdir .] [--model claude-sonnet-4]
+    CLI->>CM: load()
+    CM->>CM: 读取 ~/.crab-science/config.json
+    alt 配置文件不存在
+        CM->>CM: 创建默认配置并写入
+    end
+    CM-->>CLI: AppConfig
+
+    CLI->>CM: getApiKey(provider)
+    CM->>CM: 读取环境变量 CRAB_SCIENCE_{PROVIDER}_API_KEY
+    alt API Key 缺失
+        CM-->>CLI: 抛出错误
+        CLI-->>U: 显示引导提示（如何设置环境变量）
+        CLI->>U: 退出
+    else API Key 存在
+        CM-->>CLI: apiKey
+    end
+
+    CLI->>SL: discover()
+    SL->>SL: 扫描 skills/ 目录下所有 SKILL.md
+    SL->>SL: 解析 YAML frontmatter (name + description)
+    SL-->>CLI: SkillMeta[]
+
+    CLI->>PR: get(provider)
+    PR->>PR: 创建 Provider 实例（注入 apiKey）
+    PR-->>CLI: LLMProvider 实例
+
+    CLI->>SM: create(model, provider)
+    SM->>SM: 生成 session ID (sess_YYYYMMDD_NNN)
+    SM->>SM: 初始化空 messages 数组
+    SM-->>CLI: Session
+
+    CLI->>CLI: 挂载 SIGINT 信号处理器
+    CLI->>CLI: 渲染 Ink App
+    CLI->>CLI: 渲染 Welcome 组件（ASCII Art + 启动步骤）
+    CLI-->>U: 显示就绪状态 + 输入提示
+
+
+%% ========== 2. Agent Loop 执行流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant H as useAgent Hook
+    participant A as Agent
+    participant CB as ContextBuilder
+    participant SP as SystemPromptBuilder
+    participant P as LLMProvider
+    participant TR as ToolRegistry
+    participant SM as SessionManager
+
+    U->>CLI: 输入消息 "帮我检索 CRISPR 文献"
+    CLI->>H: sendMessage(text)
+    H->>A: run(session, userInput)
+
+    Note over A: === Agent Loop 开始 ===
+
+    loop 最多 maxIterations 次
+
+        A->>SM: addMessage(session, { role: 'user', content: userInput })
+
+        A->>CB: build(session, skills)
+        CB->>SP: build(skills)
+        SP->>SP: 构建系统提示 (< 1500 token)
+        SP->>SP: 注入角色 + 工具说明 + skill 元数据 + 工作原则
+        SP-->>CB: systemPrompt
+        CB-->>A: { systemPrompt, messages }
+
+        A->>P: complete(messages, { model, tools, systemPrompt })
+        P->>P: 转换消息格式为 Provider API 格式
+        P->>P: 发起流式请求 (SSE)
+
+        loop 流式事件流
+            P-->>A: StreamEvent: text_delta
+            A-->>H: AgentEvent: { type: 'text', content }
+            H-->>CLI: 流式渲染文本
+
+            P-->>A: StreamEvent: tool_call_start
+            A-->>H: AgentEvent: { type: 'tool_call', name, params }
+            H-->>CLI: 显示工具调用块占位
+
+            P-->>A: StreamEvent: tool_call_delta
+            Note over A: 累积工具参数 JSON 片段
+
+            P-->>A: StreamEvent: tool_call_end
+            Note over A: JSON.parse 完成参数解析
+            Note over A: 收集到 pendingToolCalls[]
+
+            P-->>A: StreamEvent: message_end
+            Note over A: 记录 TokenUsage
+        end
+
+        alt 存在待执行工具调用
+            loop 每个工具调用（串行）
+                A->>TR: execute(toolName, params, ctx)
+                TR->>TR: 执行工具逻辑
+                Note over TR: read: 读文件/glob<br/>write: 写文件+mkdir<br/>edit: 精确替换<br/>bash: 执行命令+超时
+                TR-->>A: ToolResult
+                A-->>H: AgentEvent: { type: 'tool_result', name, result }
+                H-->>CLI: 渲染工具结果
+                A->>SM: addMessage(session, { role: 'tool', content: result, toolCallId })
+            end
+            Note over A: 继续下一轮循环（userInput = ''）
+        else 无工具调用
+            Note over A: Agent 返回最终文本响应
+            A->>SM: addMessage(session, { role: 'assistant', content: response })
+            A->>SM: save(session)
+            A-->>H: AgentEvent: { type: 'done', usage }
+            H-->>CLI: 更新状态栏 (token/cost)
+        end
+
+        A->>A: iterationCount++
+        alt iterationCount >= maxIterations
+            A-->>H: AgentEvent: { type: 'error', message: '达到最大迭代次数' }
+            Note over A: 保存 session 并退出循环
+        end
+    end
+
+    Note over A: === Agent Loop 结束 ===
+
+    H-->>CLI: isProcessing = false
+    CLI-->>U: 等待下一次输入
+
+
+%% ========== 3. 流式工具调用处理细节 ==========
+
+sequenceDiagram
+    participant A as Agent
+    participant P as LLMProvider
+    participant OSP as OpenAIStreamParser
+    participant ASP as AnthropicStreamParser
+
+    A->>P: complete(messages, options)
+
+    alt OpenAI Provider
+        P->>P: client.chat.completions.create({ stream: true })
+        loop SSE chunk
+            P->>OSP: chunk.choices[0].delta
+            alt delta.content 存在
+                OSP-->>A: { type: 'text_delta', content }
+            else delta.tool_calls 存在
+                OSP->>OSP: 按 index 累积 tool_call
+                alt 首次出现该 index
+                    OSP-->>A: { type: 'tool_call_start', toolCallId, toolName }
+                end
+                OSP->>OSP: argsBuffer += delta.function.arguments
+                OSP-->>A: { type: 'tool_call_delta', toolCallId, delta }
+            end
+        end
+        loop 每个 tool_call
+            OSP-->>A: { type: 'tool_call_end', toolCallId, input: JSON.parse(argsBuffer) }
+        end
+        OSP-->>A: { type: 'message_end', usage }
+    end
+
+    alt Anthropic Provider
+        P->>P: client.messages.create({ stream: true })
+        loop SSE event
+            P->>ASP: event
+            alt event.type == 'content_block_start' && block.type == 'tool_use'
+                ASP-->>A: { type: 'tool_call_start', toolCallId, toolName }
+            else event.type == 'content_block_delta' && delta.type == 'text_delta'
+                ASP-->>A: { type: 'text_delta', content: delta.text }
+            else event.type == 'content_block_delta' && delta.type == 'input_json_delta'
+                ASP->>ASP: argsBuffer += delta.partial_json
+                ASP-->>A: { type: 'tool_call_delta', toolCallId, delta }
+            else event.type == 'content_block_stop'
+                alt 当前 block 是 tool_use
+                    ASP-->>A: { type: 'tool_call_end', toolCallId, input: JSON.parse(argsBuffer) }
+                end
+            else event.type == 'message_delta'
+                ASP->>ASP: 提取 usage
+            else event.type == 'message_stop'
+                ASP-->>A: { type: 'message_end', usage }
+            end
+        end
+    end
+
+    Note over A: 收集所有 tool_call_end 事件
+    Note over A: 检查是否有待执行工具
+    alt 有工具调用
+        Note over A: 串行执行 → 结果回注 → 下一轮 LLM 调用
+    else 无工具调用
+        Note over A: Agent Loop 结束
+    end
+
+
+%% ========== 4. 模型切换流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant CH as CommandHandler
+    participant H as useAgent Hook
+    participant PR as ProviderRegistry
+
+    U->>CLI: 输入 "/model gpt-4o"
+    CLI->>CH: handle("/model gpt-4o")
+    CH->>CH: 解析命令 + 参数
+    CH->>PR: get("openai")
+    PR-->>CH: OpenAIProvider
+    CH->>CH: 验证模型是否可用
+    CH-->>CLI: { handled: true, action: switchModel("gpt-4o") }
+    CLI->>H: switchModel("gpt-4o")
+    H->>H: 更新 currentModel + currentProvider
+    H->>H: 更新 session.model + session.provider
+    H-->>CLI: 模型已切换
+    CLI-->>U: 状态栏更新为 [GPT-4o]
+    CLI-->>U: "✅ 已切换到 GPT-4o"
+
+
+%% ========== 5. Session 保存与恢复流程 ==========
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as CLI App
+    participant SM as SessionManager
+    participant FS as 文件系统
+
+    Note over U,FS: === 保存 ===
+    U->>CLI: 输入 "/exit" 或 Ctrl+C
+    CLI->>SM: save(session)
+    SM->>SM: JSON.stringify(session)
+    SM->>FS: 写入 ~/.crab-science/sessions/{id}.json
+    FS-->>SM: 写入成功
+    SM-->>CLI: 保存完成
+    CLI-->>U: "Session 已保存: sess_20260720_001"
+
+    Note over U,FS: === 恢复 ===
+    U->>CLI: 启动 crab-science
+    U->>CLI: 输入 "/session list"
+    CLI->>SM: list()
+    SM->>FS: 读取 sessions/ 目录
+    FS-->>SM: 文件列表
+    SM->>SM: 解析每个 JSON 的元数据
+    SM-->>CLI: SessionMeta[] (id, createdAt, model, messageCount)
+    CLI-->>U: 显示 session 列表
+
+    U->>CLI: 输入 "/session load sess_20260720_001"
+    CLI->>SM: load("sess_20260720_001")
+    SM->>FS: 读取 sessions/sess_20260720_001.json
+    FS-->>SM: JSON 内容
+    SM->>SM: JSON.parse → Session 对象
+    SM-->>CLI: Session (含完整消息历史)
+    CLI->>CLI: 渲染历史消息到对话区
+    CLI-->>U: "✅ 已恢复 session (15 条消息)"

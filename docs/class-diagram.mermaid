@@ -1,0 +1,377 @@
+%% Crab-Science Phase 1 — 类图
+%% 作者：高见远（架构师）
+
+classDiagram
+    direction TB
+
+    %% ========== shared 包 ==========
+
+    class Message {
+        +role: MessageRole
+        +content: string | ContentBlock[]
+        +toolCallId?: string
+    }
+
+    class ContentBlock {
+        +type: 'text' | 'tool_use' | 'tool_result'
+        +text?: string
+        +toolCallId?: string
+        +toolName?: string
+        +input?: Record~string, unknown~
+        +output?: string
+        +isError?: boolean
+    }
+
+    class ToolDefinition {
+        +name: string
+        +description: string
+        +parameters: ToolParameterSchema
+    }
+
+    class ToolParameterSchema {
+        +type: 'object'
+        +properties: Record~string, object~
+        +required: string[]
+    }
+
+    class ToolResult {
+        +success: boolean
+        +output: string
+        +error?: string
+    }
+
+    class ToolContext {
+        +workDir: string
+        +sessionId: string
+    }
+
+    class Session {
+        +id: string
+        +messages: Message[]
+        +model: string
+        +provider: string
+        +createdAt: string
+        +updatedAt: string
+        +totalInputTokens: number
+        +totalOutputTokens: number
+        +totalCost: number
+    }
+
+    class AppConfig {
+        +defaultProvider: 'openai' | 'anthropic'
+        +defaultModel: string
+        +maxIterations: number
+        +bashTimeoutMs: number
+        +workDir: string
+    }
+
+    class SkillMeta {
+        +name: string
+        +description: string
+        +version: number
+    }
+
+    class Skill {
+        +meta: SkillMeta
+        +path: string
+        +content: string
+    }
+
+    class TokenUsage {
+        +inputTokens: number
+        +outputTokens: number
+        +cost: number
+    }
+
+    %% ========== llm-layer 包 ==========
+
+    class LLMProvider {
+        <<interface>>
+        +name: string
+        +complete(messages: Message[], options: LLMOptions): AsyncGenerator~StreamEvent~
+        +listModels(): ModelInfo[]
+    }
+
+    class LLMOptions {
+        +model: string
+        +tools?: ToolDefinition[]
+        +temperature?: number
+        +maxTokens?: number
+        +systemPrompt: string
+    }
+
+    class StreamEvent {
+        <<union type>>
+        text_delta
+        tool_call_start
+        tool_call_delta
+        tool_call_end
+        message_end
+    }
+
+    class ModelInfo {
+        +id: string
+        +name: string
+        +provider: string
+        +contextWindow: number
+        +pricing: object
+    }
+
+    class OpenAIProvider {
+        +name: string = 'openai'
+        -client: OpenAIClient
+        +complete(messages, options): AsyncGenerator~StreamEvent~
+        +listModels(): ModelInfo[]
+        -convertMessages(messages: Message[]): OpenAIMessage[]
+        -convertTools(tools: ToolDefinition[]): OpenAITool[]
+    }
+
+    class AnthropicProvider {
+        +name: string = 'anthropic'
+        -client: AnthropicClient
+        +complete(messages, options): AsyncGenerator~StreamEvent~
+        +listModels(): ModelInfo[]
+        -convertMessages(messages: Message[]): AnthropicMessage[]
+        -convertTools(tools: ToolDefinition[]): AnthropicTool[]
+    }
+
+    class ProviderRegistry {
+        -providers: Map~string, LLMProvider~
+        +register(provider: LLMProvider): void
+        +get(name: string): LLMProvider
+        +list(): string[]
+        +createProvider(name: string, apiKey: string): LLMProvider
+    }
+
+    class TokenCounter {
+        -pricingTable: Map~string, ModelPricing~
+        +countTokens(text: string): number
+        +estimateCost(inputTokens: number, outputTokens: number, model: string): number
+    }
+
+    %% ========== agent-core 包 ==========
+
+    class Tool {
+        <<interface>>
+        +name: string
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params: any, ctx: ToolContext): Promise~ToolResult~
+    }
+
+    class ReadTool {
+        +name: string = 'read'
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params, ctx): Promise~ToolResult~
+        -readFile(path: string, workDir: string): string
+        -globFiles(pattern: string, workDir: string): string[]
+        -truncateOutput(content: string, maxLines: number): string
+    }
+
+    class WriteTool {
+        +name: string = 'write'
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params, ctx): Promise~ToolResult~
+        -ensureDir(dirPath: string): void
+        -validatePath(path: string, workDir: string): boolean
+    }
+
+    class EditTool {
+        +name: string = 'edit'
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params, ctx): Promise~ToolResult~
+        -countMatches(content: string, oldString: string): number
+        -replaceString(content: string, oldString: string, newString: string): string
+    }
+
+    class BashTool {
+        +name: string = 'bash'
+        +description: string
+        +parameters: ToolParameterSchema
+        +execute(params, ctx): Promise~ToolResult~
+        -executeCommand(command: string, cwd: string, timeoutMs: number): ExecResult
+        -formatOutput(stdout: string, stderr: string, exitCode: number): string
+    }
+
+    class ToolRegistry {
+        -tools: Map~string, Tool~
+        +register(tool: Tool): void
+        +get(name: string): Tool
+        +getDefinitions(): ToolDefinition[]
+        +execute(name: string, params: any, ctx: ToolContext): Promise~ToolResult~
+    }
+
+    class SessionManager {
+        -sessionsDir: string
+        +create(model: string, provider: string): Session
+        +load(id: string): Session | null
+        +save(session: Session): void
+        +list(): SessionMeta[]
+        +addMessage(session: Session, message: Message): void
+        +delete(id: string): void
+    }
+
+    class SessionMeta {
+        +id: string
+        +createdAt: string
+        +model: string
+        +provider: string
+        +messageCount: number
+    }
+
+    class SkillLoader {
+        -skillsDirs: string[]
+        +discover(): SkillMeta[]
+        +load(name: string): Skill | null
+        +getMetadataForPrompt(): string
+        -parseFrontmatter(filePath: string): SkillMeta | null
+    }
+
+    class ContextBuilder {
+        -systemPromptBuilder: SystemPromptBuilder
+        +build(session: Session, skills: SkillMeta[]): BuildResult
+    }
+
+    class BuildResult {
+        +systemPrompt: string
+        +messages: Message[]
+    }
+
+    class SystemPromptBuilder {
+        +build(skills: SkillMeta[]): string
+        -buildRoleSection(): string
+        -buildToolSection(): string
+        -buildSkillSection(skills: SkillMeta[]): string
+        -buildPrinciplesSection(workDir: string): string
+        -estimateTokens(text: string): number
+    }
+
+    class ConfigManager {
+        -configPath: string
+        -config: AppConfig
+        +load(): AppConfig
+        +save(config: AppConfig): void
+        +getApiKey(provider: string): string
+        +validate(): ValidationResult
+        +ensureConfigDir(): void
+    }
+
+    class ValidationResult {
+        +valid: boolean
+        +errors: string[]
+    }
+
+    class Agent {
+        -provider: LLMProvider
+        -toolRegistry: ToolRegistry
+        -sessionManager: SessionManager
+        -skillLoader: SkillLoader
+        -contextBuilder: ContextBuilder
+        -config: AppConfig
+        +run(session: Session, userInput: string): AsyncGenerator~AgentEvent~
+        -executeToolCalls(toolCalls: ToolCall[], session: Session): void
+        -checkIterationLimit(count: number): boolean
+        -handleError(error: Error): AgentEvent
+    }
+
+    class AgentEvent {
+        <<union type>>
+        text: { type: 'text', content: string }
+        tool_call: { type: 'tool_call', name, params }
+        tool_result: { type: 'tool_result', name, result }
+        error: { type: 'error', message }
+        done: { type: 'done', usage }
+    }
+
+    class ToolCall {
+        +toolCallId: string
+        +toolName: string
+        +input: Record~string, unknown~
+    }
+
+    %% ========== apps/cli 包 ==========
+
+    class CrabCLI {
+        +render(): void
+        -handleInput(text: string): void
+    }
+
+    class useAgentHook {
+        +sendMessage(text: string): Promise~void~
+        +switchModel(model: string): void
+        +clearSession(): void
+        +isProcessing: boolean
+        +currentModel: string
+        +tokenUsage: TokenUsage
+    }
+
+    class CommandHandler {
+        +handle(command: string): CommandResult
+        -handleModel(args: string[]): CommandResult
+        -handleClear(): CommandResult
+        -handleSkills(): CommandResult
+        -handleSession(args: string[]): CommandResult
+        -handleConfig(): CommandResult
+        -handleHelp(): CommandResult
+    }
+
+    class CommandResult {
+        +handled: boolean
+        +output?: string
+        +action?: Function
+    }
+
+    %% ========== 关系 ==========
+
+    Message "1" --> "*" ContentBlock : content
+    ToolDefinition --> ToolParameterSchema
+    Skill --> SkillMeta
+    Session "1" --> "*" Message : messages
+
+    LLMProvider <|.. OpenAIProvider : implements
+    LLMProvider <|.. AnthropicProvider : implements
+    LLMProvider ..> LLMOptions : uses
+    LLMProvider ..> StreamEvent : yields
+    LLMProvider ..> ModelInfo : returns
+    ProviderRegistry "1" --> "*" LLMProvider : manages
+    TokenCounter ..> TokenUsage : produces
+
+    Tool <|.. ReadTool : implements
+    Tool <|.. WriteTool : implements
+    Tool <|.. EditTool : implements
+    Tool <|.. BashTool : implements
+    Tool ..> ToolResult : returns
+    Tool ..> ToolContext : receives
+    ToolRegistry "1" --> "*" Tool : manages
+    ToolRegistry ..> ToolDefinition : produces
+
+    SessionManager "1" --> "*" Session : manages
+    SessionManager ..> SessionMeta : returns
+
+    SkillLoader "1" --> "*" SkillMeta : discovers
+    SkillLoader ..> Skill : loads
+
+    ContextBuilder --> SystemPromptBuilder : delegates
+    ContextBuilder ..> BuildResult : returns
+    SystemPromptBuilder ..> SkillMeta : uses
+
+    ConfigManager --> AppConfig : manages
+    ConfigManager ..> ValidationResult : returns
+
+    Agent --> LLMProvider : uses
+    Agent --> ToolRegistry : uses
+    Agent --> SessionManager : uses
+    Agent --> SkillLoader : uses
+    Agent --> ContextBuilder : uses
+    Agent --> AppConfig : reads
+    Agent ..> AgentEvent : yields
+    Agent ..> ToolCall : processes
+
+    CrabCLI --> useAgentHook : uses
+    CrabCLI --> CommandHandler : uses
+    CommandHandler ..> CommandResult : returns
+    useAgentHook --> Agent : wraps
+    useAgentHook ..> TokenUsage : tracks

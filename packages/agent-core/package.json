@@ -1,0 +1,32 @@
+{
+  "name": "@crab-science/agent-core",
+  "version": "0.1.0",
+  "description": "Crab-Science Agent 核心：Agent Loop + Tools + Session + Skills",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@crab-science/shared": "workspace:*",
+    "@crab-science/llm-layer": "workspace:*",
+    "fast-glob": "^3.3.2",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsup": "^8.2.0",
+    "@types/node": "^20.14.0"
+  }
+}
