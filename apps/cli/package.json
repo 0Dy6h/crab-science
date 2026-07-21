@@ -16,6 +16,8 @@
   "dependencies": {
     "@crab-science/shared": "workspace:*",
     "@crab-science/agent-core": "workspace:*",
+    "@crab-science/evolution-engine": "workspace:*",
+    "@crab-science/storage": "workspace:*",
     "@crab-science/llm-layer": "workspace:*",
     "ink": "^4.4.1",
     "react": "^18.3.1",

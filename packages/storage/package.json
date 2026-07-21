@@ -1,0 +1,32 @@
+{
+  "name": "@crab-science/storage",
+  "version": "0.1.0",
+  "description": "Crab-Science 存储层：SQLite + Git 版本控制",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@crab-science/shared": "workspace:*",
+    "better-sqlite3": "^11.0.0",
+    "isomorphic-git": "^1.30.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "tsup": "^8.2.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^20.14.0"
+  }
+}

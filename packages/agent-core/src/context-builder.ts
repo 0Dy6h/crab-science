@@ -4,15 +4,20 @@ import type {
   SkillMeta,
   ToolDefinition,
   AppConfig,
+  SubagentFrontmatter,
 } from '@crab-science/shared';
 import { SystemPromptBuilder } from './system-prompt.js';
 import { TreeUtils } from './session/tree-utils.js';
 
 /**
- * Context 构建器（Phase 2 树形 Session 适配）
+ * Context 构建器（Phase 3 升级）
  *
  * 将系统提示 + 当前路径消息历史组装为 LLM 可用的 context
  * 从 root → currentNodeId 路径提取消息，分支中的消息不进入 context
+ *
+ * Phase 3 新增：
+ * - Subagent 元数据注入系统提示
+ * - 相关经验注入系统提示
  */
 export class ContextBuilder {
   private systemPromptBuilder: SystemPromptBuilder;
@@ -22,11 +27,13 @@ export class ContextBuilder {
   }
 
   /**
-   * 构建完整 context
+   * 构建完整 context（Phase 3 升级）
    * @param session - 当前 Session（树形）
    * @param skills - 已发现的 Skill 元数据
    * @param config - 应用配置
    * @param extensionTools - Extension 注册的工具定义（可选）
+   * @param subagents - 已发现的 Subagent 元数据（可选，Phase 3 新增）
+   * @param experienceText - 经验注入文本（可选，Phase 3 新增）
    * @returns 系统提示 + 消息数组（从当前路径提取）
    */
   build(
@@ -34,6 +41,8 @@ export class ContextBuilder {
     skills: SkillMeta[],
     config: AppConfig,
     extensionTools?: ToolDefinition[],
+    subagents?: SubagentFrontmatter[],
+    experienceText?: string,
   ): {
     systemPrompt: string;
     messages: Message[];
@@ -42,6 +51,8 @@ export class ContextBuilder {
       skills,
       config,
       extensionTools,
+      subagents,
+      experienceText,
     );
     const messages = this.extractPathMessages(session);
     return { systemPrompt, messages };

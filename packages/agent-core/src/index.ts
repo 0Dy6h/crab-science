@@ -1,5 +1,6 @@
 // Crab-Science Agent Core 统一导出
 // Phase 2: 新增 TreeUtils, SkillExecutionLogger, Extension 相关
+// Phase 3: 新增 Subagent 模块, EvolutionEngine 类型导出
 
 // Agent
 export { Agent } from './agent.js';
@@ -33,3 +34,16 @@ export type { SkillExecutionRecord } from '@crab-science/shared';
 // Extensions
 export { ExtensionLoader } from './extensions/loader.js';
 export type { LoadedExtension } from './extensions/types.js';
+
+// Subagents (Phase 3 新增)
+export { SubagentLoader } from './subagents/loader.js';
+export { SubagentRegistry } from './subagents/registry.js';
+export { DelegateTool } from './subagents/delegate-tool.js';
+export type { DelegateFunction } from './subagents/delegate-tool.js';
+export type { SubagentMeta } from './subagents/types.js';
+export type {
+  SubagentDefinition,
+  SubagentFrontmatter,
+  SubagentExecutionRecord,
+  SubagentMetrics,
+} from '@crab-science/shared';

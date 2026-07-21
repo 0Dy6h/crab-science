@@ -2,23 +2,38 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { SkillExecutionRecord } from '@crab-science/shared';
 import { generateId, nowISO } from '@crab-science/shared';
+import type { SkillMetricsRepository } from '@crab-science/storage';
 
 /**
- * Skill 执行记录日志器
+ * Skill 执行记录日志器（Phase 3 升级）
  *
- * 使用 JSONL 格式存储执行记录，每行一个 JSON 对象。
+ * Phase 3 策略：SQLite 优先，JSONL 回退
+ * - 如果传入 SkillMetricsRepository（SQLite），写入 SQLite
+ * - 否则回退到 JSONL 文件（Phase 2 兼容）
+ *
  * 文件路径：{skillsDir}/{skillName}/executions.jsonl
- *
- * Phase 2 使用 JSONL，Phase 3 迁移 SQLite。
  */
 export class SkillExecutionLogger {
   private skillsDirs: string[];
+  private skillMetricsRepo: SkillMetricsRepository | null;
 
   /**
    * @param skillsDirs - skill 搜索目录列表
+   * @param skillMetricsRepo - SQLite 仓库（可选，Phase 3 新增）
    */
-  constructor(skillsDirs: string[]) {
+  constructor(
+    skillsDirs: string[],
+    skillMetricsRepo?: SkillMetricsRepository,
+  ) {
     this.skillsDirs = skillsDirs;
+    this.skillMetricsRepo = skillMetricsRepo ?? null;
+  }
+
+  /**
+   * 设置 SQLite 仓库（延迟注入）
+   */
+  setSkillMetricsRepo(repo: SkillMetricsRepository): void {
+    this.skillMetricsRepo = repo;
   }
 
   /**
@@ -53,10 +68,33 @@ export class SkillExecutionLogger {
 
   /**
    * 记录 Skill 执行
+   * Phase 3: SQLite 优先，JSONL 回退
+   *
    * @param skillName - skill 名称
    * @param record - 执行记录（不含 id 和 timestamp，由本方法生成）
    */
   log(
+    skillName: string,
+    record: Omit<SkillExecutionRecord, 'id' | 'timestamp'>,
+  ): void {
+    // Phase 3: SQLite 优先
+    if (this.skillMetricsRepo) {
+      try {
+        this.skillMetricsRepo.insertExecution(record);
+        return;
+      } catch (err) {
+        console.error('[SkillExecutionLogger] SQLite 写入失败，回退到 JSONL:', err);
+      }
+    }
+
+    // JSONL 回退
+    this.logToJsonl(skillName, record);
+  }
+
+  /**
+   * JSONL 写入（Phase 2 兼容）
+   */
+  private logToJsonl(
     skillName: string,
     record: Omit<SkillExecutionRecord, 'id' | 'timestamp'>,
   ): void {
@@ -80,11 +118,39 @@ export class SkillExecutionLogger {
 
   /**
    * 查询 Skill 执行历史
+   * Phase 3: SQLite 优先，JSONL 回退
+   *
    * @param skillName - skill 名称
    * @param options - 查询选项（limit、状态筛选）
    * @returns 执行记录列表（按时间倒序）
    */
   query(
+    skillName: string,
+    options?: {
+      limit?: number;
+      status?: SkillExecutionRecord['status'];
+    },
+  ): SkillExecutionRecord[] {
+    // Phase 3: SQLite 优先
+    if (this.skillMetricsRepo) {
+      try {
+        return this.skillMetricsRepo.queryExecutions(skillName, {
+          limit: options?.limit,
+          status: options?.status,
+        });
+      } catch (err) {
+        console.error('[SkillExecutionLogger] SQLite 查询失败，回退到 JSONL:', err);
+      }
+    }
+
+    // JSONL 回退
+    return this.queryFromJsonl(skillName, options);
+  }
+
+  /**
+   * JSONL 查询（Phase 2 兼容）
+   */
+  private queryFromJsonl(
     skillName: string,
     options?: {
       limit?: number;
@@ -131,10 +197,23 @@ export class SkillExecutionLogger {
 
   /**
    * 获取执行次数
+   * Phase 3: SQLite 优先，JSONL 回退
+   *
    * @param skillName - skill 名称
    * @returns 执行记录总数
    */
   count(skillName: string): number {
-    return this.query(skillName).length;
+    // Phase 3: SQLite 优先
+    if (this.skillMetricsRepo) {
+      try {
+        const metrics = this.skillMetricsRepo.getMetrics(skillName);
+        return metrics.usageCount;
+      } catch (err) {
+        console.error('[SkillExecutionLogger] SQLite 计数失败，回退到 JSONL:', err);
+      }
+    }
+
+    // JSONL 回退
+    return this.queryFromJsonl(skillName).length;
   }
 }

@@ -1,0 +1,277 @@
+%% Crab-Science Phase 3 时序图
+%% 版本: v3.0
+%% 日期: 2026-07-20
+%% 作者: 高见远（架构师）
+%%
+%% 包含 4 个关键流程：
+%% 1. Skill 进化全流程（评估→建议→采纳→验证→回滚）
+%% 2. Subagent 创建与委派流程
+%% 3. Experience 提取与注入流程
+%% 4. Evolution Engine 调度流程
+
+%% ============================================================
+%% 流程 1: Skill 进化全流程
+%% ============================================================
+
+sequenceDiagram
+    participant A as Agent
+    participant EE as EvolutionEngine
+    participant SME as SkillMetricsEvaluator
+    participant SO as SkillOptimizer
+    participant SV as SkillVersioner
+    participant SVal as SkillValidator
+    participant SMR as SkillMetricsRepo
+    participant GM as GitManager
+    participant CLI as CLI
+
+    Note over A,CLI: === 任务完成后触发进化 ===
+
+    A->>EE: onTaskComplete(session, taskInfo)
+    EE->>EE: taskCount++ (达到 N=10 触发评估)
+
+    Note over EE: === Step 1: Skill 效果评估 ===
+    EE->>SME: evaluateAll()
+    SME->>SMR: getMetrics(skillName) × N
+    SMR-->>SME: SkillMetrics[]
+    SME->>SME: needsOptimization(metrics)
+    Note over SME: 阈值: 成功率<70%, 耗时↑20%, 满意度<3.5
+    SME-->>EE: SkillEvaluationResult[] (部分 needsOptimization=true)
+
+    loop 每个 needsOptimization 的 Skill
+        Note over EE: === Step 2: 优化建议生成 ===
+        EE->>SO: generateSuggestion(skillName, evaluation)
+        SO->>SMR: queryExecutions(skillName, { limit: 20 })
+        SMR-->>SO: SkillExecutionRecord[]
+        SO->>SO: identifyFailurePatterns(records)
+        SO->>SO: 调用 evolutionProvider LLM 分析
+        SO-->>EE: OptimizationSuggestion { severity }
+
+        alt severity === 'minor' && autoApplyMinorChanges
+            Note over EE: === Step 3a: 自动采纳（小优化） ===
+            EE->>SV: applySuggestion(suggestion)
+            SV->>SV: bumpVersion(SKILL.md) → v2
+            SV->>SV: applyEdit(suggestion.section, suggestion.suggestion)
+            SV->>GM: commit(SKILL.md, "feat(skill): optimize {name} v2")
+            GM-->>SV: commitHash
+            SV->>SV: appendChangelog(entry)
+            SV-->>EE: { newVersion: 2, commitHash }
+            EE->>CLI: event: optimization_applied
+        else severity === 'major'
+            Note over EE: === Step 3b: 需用户确认 ===
+            EE->>CLI: event: optimization_proposed (suggestion)
+            CLI->>CLI: 显示 diff 预览 + y/n 确认
+            CLI-->>EE: 用户确认 y
+            EE->>SV: applySuggestion(suggestion)
+            SV-->>EE: { newVersion, commitHash }
+        end
+
+        Note over EE: === Step 4: 版本验证（延迟） ===
+        Note over SVal: 新版本标记 pendingValidation=true<br/>后续 N=3 次执行后判定
+
+        EE->>SVal: checkValidationStatus(skillName)
+        SVal->>SMR: queryExecutions since versionCreatedAt
+        SVal-->>EE: { pending: true, executions: 1 }
+
+        Note over SVal: ... 累积 3 次后 ...
+
+        EE->>SVal: validate(skillName)
+        SVal->>SMR: getVersionComparison(skillName, v1, v2)
+        SMR-->>SVal: { v1: metrics, v2: metrics }
+
+        alt 成功率下降 >15% 或 满意度下降 >0.5
+            SVal->>SV: rollback(skillName, v1)
+            SV->>GM: checkout(SKILL.md, oldCommitHash)
+            SV->>SV: appendChangelog({ type: 'skill_rollback' })
+            SVal-->>EE: { passed: false, rolledBack: true }
+            EE->>CLI: event: rollback
+        else 指标改善或持平
+            SVal->>SMR: updateExecution → pendingValidation=false
+            SVal-->>EE: { passed: true, rolledBack: false }
+        end
+    end
+
+%% ============================================================
+%% 流程 2: Subagent 创建与委派流程
+%% ============================================================
+
+sequenceDiagram
+    participant U as 用户
+    participant A as Agent
+    participant EE as EvolutionEngine
+    participant PD as PatternDetector
+    participant SC as SubagentCreator
+    participant SD as SubagentDelegator
+    participant SM as SessionManager
+    participant CLI as CLI
+
+    Note over U,CLI: === 模式检测 → Subagent 创建 ===
+
+    EE->>PD: detect()
+    PD->>PD: 查询最近任务记录
+    PD->>PD: 提取签名 (task类型 + tools + skill)
+    Note over PD: 同类模式 ≥5 次 → 触发创建建议
+    PD-->>EE: PatternMatch[]
+
+    loop 每个检测到的模式
+        EE->>SC: createDraft(pattern)
+        SC->>SC: 调用 evolutionProvider LLM 生成 Subagent 定义
+        SC-->>EE: SubagentDefinition (草案)
+        EE->>CLI: event: subagent_proposed (pattern + draft)
+        CLI->>U: 显示: "检测到重复模式，建议创建 Subagent"
+        U->>CLI: 确认创建 (y)
+        CLI-->>EE: 用户确认
+        EE->>SC: create(subagent)
+        SC->>SC: 保存到 ~/.crab-science/subagents/{name}.md
+        SC-->>EE: 文件路径
+        EE->>CLI: event: subagent_created
+    end
+
+    Note over U,CLI: === 透明 Subagent 委派 ===
+
+    U->>A: "帮我检索 CRISPR 文献"
+    A->>A: 构建系统提示 (含 subagent 描述)
+    Note over A: LLM 看到 subagent 描述<br/>自主决定是否委派
+
+    A->>A: LLM 返回: delegate(subagent="literature-search-agent", task="检索CRISPR文献")
+
+    A->>SD: delegate(session, subagent, task)
+    SD->>SM: fork(session, { reason: "subagent: literature-search-agent" })
+    SM-->>SD: forkNodeId (子分支起点)
+
+    Note over SD: === Subagent 在子分支中执行 ===
+    SD->>SD: 构建 subagent context (从 fork 点)
+    SD->>SD: 使用 subagent.model 创建 Provider
+    SD->>SD: 执行 Agent Loop (在子分支中)
+    Note over SD: 工具调用、LLM 响应都追加到子分支<br/>主分支不受影响
+
+    alt 执行成功
+        SD->>SM: summarize(session, branchLeafId, currentNodeId)
+        SM->>SM: LLM 生成摘要
+        SM-->>SD: summaryNodeId
+        SD-->>A: { summary: "找到 15 篇相关文献...", success: true }
+    else 执行失败
+        SD->>SM: summarize(session, branchLeafId, currentNodeId)
+        SM-->>SD: summaryNodeId (失败摘要)
+        SD-->>A: { summary: "[Subagent 执行失败: ...]", success: false }
+    end
+
+    A->>A: 将摘要作为 assistant 消息
+    Note over A: 主 agent context 中只看到摘要<br/>不包含 subagent 中间步骤
+    A-->>CLI: yield AgentEvent (摘要文本)
+    CLI-->>U: 显示摘要结果
+
+%% ============================================================
+%% 流程 3: Experience 提取与注入流程
+%% ============================================================
+
+sequenceDiagram
+    participant A as Agent
+    participant EE as EvolutionEngine
+    participant EX as ExperienceExtractor
+    participant KG as KnowledgeGraph
+    participant KR as KnowledgeRetriever
+    participant ER as ExperienceRepo
+    participant KRepo as KnowledgeRepo
+    participant CB as ContextBuilder
+
+    Note over A,CB: === 任务完成后: 经验提取 ===
+
+    A->>EE: onTaskComplete(session, taskInfo)
+    EE->>EX: extract(session, taskInfo)
+
+    EX->>EX: 提取执行路径消息 (root → currentNodeId)
+    EX->>EX: 调用 evolutionProvider LLM 分析
+    Note over EX: Prompt: "分析以下任务执行过程,<br/>提取 key learnings 和 tags"
+    EX->>EX: LLM 返回: { keyLearnings: [...], tags: [...] }
+
+    EX->>ER: insert(experience)
+    ER-->>EX: Experience (含 id)
+
+    Note over EX: === 知识图谱建边 ===
+    EX->>KG: buildEdgesForExperience(experience)
+    KG->>ER: findByTags(experience.tags)
+    ER-->>KG: Experience[] (同 tag 的已有经验)
+    KG->>KRepo: addEdge(newExp.id, existingExp.id, 'same_tag')
+    KG->>ER: findBySkill(experience.skillUsed)
+    ER-->>KG: Experience[] (同 skill 的已有经验)
+    KG->>KRepo: addEdge(newExp.id, existingExp.id, 'same_skill')
+
+    EX-->>EE: Experience
+    EE->>A: event: experience_extracted
+
+    Note over A,CB: === 下一次任务: 经验注入 ===
+
+    A->>A: 用户输入新任务
+    A->>CB: build(session, skills, config, extTools, subagents)
+    CB->>KR: retrieve(taskDescription, topK=3)
+    KR->>ER: findByTaskKeywords(keywords)
+    ER-->>KR: Experience[] (关键词匹配)
+    KR->>KRepo: findRelated(experienceId)
+    KRepo-->>KR: KnowledgeEdge[] (图谱边)
+    KR->>KR: 按权重排序, 取 top-3
+    KR->>KR: formatForInjection(experiences)
+    KR->>KR: checkTokenBudget(text) (< 500 token)
+    KR-->>CB: 注入文本
+
+    CB->>CB: 系统提示词中加入 "# 相关经验" 段
+    CB-->>A: { systemPrompt, messages }
+    Note over A: Agent 在 context 中看到相关经验<br/>指导当前任务执行
+
+%% ============================================================
+%% 流程 4: Evolution Engine 调度流程
+%% ============================================================
+
+sequenceDiagram
+    participant U as 用户
+    participant A as Agent
+    participant EE as EvolutionEngine
+    participant CLI as CLI
+
+    Note over U,CLI: === 正常任务执行（不触发进化）===
+
+    U->>A: 输入任务
+    A->>A: run(session, userInput)
+    A-->>CLI: AgentEvent stream
+    A->>EE: onTaskComplete(session, taskInfo) [async, 不 await]
+    EE->>EE: taskCount = 1 (未达阈值 10)
+    Note over EE: 进化评估异步执行, 用户可继续交互
+
+    U->>A: 输入下一个任务
+    Note over A: 用户无需等待进化完成
+
+    Note over U,CLI: === 第 10 次任务后: 触发完整评估周期 ===
+
+    A->>EE: onTaskComplete(session, taskInfo)
+    EE->>EE: taskCount = 10 (达到阈值)
+    EE->>EE: 触发完整评估周期
+
+    par 异步执行三层评估
+        Note over EE: === 1. Skill 评估 ===
+        EE->>EE: SkillMetricsEvaluator.evaluateAll()
+        EE->>EE: 对需优化的 Skill 调用 SkillOptimizer
+        EE->>EE: 采纳建议 (minor 自动, major 通知 CLI)
+        EE->>EE: SkillValidator 检查待验证版本
+    and
+        Note over EE: === 2. Subagent 模式检测 ===
+        EE->>EE: PatternDetector.detect()
+        EE->>EE: 检测到模式 → 通知 CLI 创建建议
+    and
+        Note over EE: === 3. Knowledge 经验提取 ===
+        EE->>EE: ExperienceExtractor.extract()
+        EE->>EE: KnowledgeGraph.buildEdges()
+    end
+
+    EE->>EE: 评估完成
+    EE->>CLI: event: evaluation_complete (summary)
+
+    Note over EE: === 需要用户确认时 ===
+    EE->>CLI: event: optimization_proposed (major suggestion)
+    CLI->>U: 显示: "Skill 有重大优化建议, 是否采纳? (y/n)"
+    Note over CLI: 不阻塞当前对话<br/>用户可在下次交互时回答
+
+    Note over U,CLI: === 手动触发进化 (/evolve) ===
+    U->>CLI: /evolve
+    CLI->>EE: evaluate()
+    EE->>EE: 立即执行完整评估周期
+    EE-->>CLI: 评估报告 (文本)
+    CLI-->>U: 显示进化报告

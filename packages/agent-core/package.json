@@ -21,6 +21,8 @@
   "dependencies": {
     "@crab-science/shared": "workspace:*",
     "@crab-science/llm-layer": "workspace:*",
+    "@crab-science/evolution-engine": "workspace:*",
+    "@crab-science/storage": "workspace:*",
     "fast-glob": "^3.3.2",
     "gray-matter": "^4.0.3",
     "esbuild": "^0.23.0",

@@ -94,6 +94,15 @@ export function App({ workDir }: AppProps): React.ReactElement {
         </Box>
       )}
 
+      {/* Phase 3: 进化状态指示器 */}
+      {agent.subagents.length > 0 && (
+        <Box paddingLeft={1}>
+          <Text color="gray">
+            {chalk.magenta('evo')} {chalk.magenta('sa')} {agent.subagents.length} subagents
+          </Text>
+        </Box>
+      )}
+
       <Box flexDirection="column" flexGrow={1}>
         {showWelcome && (
           <Welcome

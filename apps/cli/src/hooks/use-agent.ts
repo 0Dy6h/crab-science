@@ -7,6 +7,13 @@ import type {
   AppConfig,
   LoadedExtension,
   SkillExecutionRecord,
+  EvolutionEvent,
+  Experience,
+  SkillEvaluationResult,
+  PatternMatch,
+  SubagentMetrics,
+  ChangeEntry,
+  SubagentFrontmatter,
 } from '@crab-science/shared';
 import {
   Agent,
@@ -17,12 +24,18 @@ import {
   ConfigManager,
   ExtensionLoader,
   TreeUtils,
+  SubagentLoader,
+  SubagentRegistry,
 } from '@crab-science/agent-core';
 import type { BranchInfo, TreeStructure } from '@crab-science/agent-core';
 import { createProvider, ProviderRegistry } from '@crab-science/llm-layer';
+import { EvolutionEngine } from '@crab-science/evolution-engine';
+import { SubagentDelegator } from '@crab-science/evolution-engine';
+import { CrabDatabase, GitManager } from '@crab-science/storage';
 import {
   GLOBAL_EXTENSIONS_DIR,
   PROJECT_EXTENSIONS_DIR,
+  SUBAGENTS_DIR,
   expandTilde,
 } from '@crab-science/shared';
 
@@ -68,6 +81,16 @@ export interface UseAgentReturn {
   refreshExtensions: () => void;
   getSkillHistory: (skillName: string, limit?: number) => SkillExecutionRecord[];
   refreshDisplay: () => void;
+  // Phase 3: Evolution
+  evolutionEvents: EvolutionEvent[];
+  subagents: SubagentFrontmatter[];
+  triggerEvolution: () => Promise<void>;
+  getEvaluations: () => SkillEvaluationResult[];
+  getDetectedPatterns: () => PatternMatch[];
+  getRecentExperiences: (limit?: number) => Experience[];
+  getChangelog: () => ChangeEntry[];
+  getSubagentMetrics: (name: string) => SubagentMetrics | null;
+  submitRating: (skillName: string, rating: number) => void;
 }
 
 /**
@@ -86,6 +109,8 @@ export function useAgent(workDir: string): UseAgentReturn {
   const [sessionList, setSessionList] = useState<UseAgentReturn['sessionList']>([]);
   const [skills, setSkills] = useState<{ name: string; description: string }[]>([]);
   const [extensions, setExtensions] = useState<LoadedExtension[]>([]);
+  const [evolutionEvents, setEvolutionEvents] = useState<EvolutionEvent[]>([]);
+  const [subagents, setSubagents] = useState<SubagentFrontmatter[]>([]);
 
   // 使用 ref 保存可变对象（不触发重渲染）
   const configManagerRef = useRef<ConfigManager | null>(null);
@@ -98,6 +123,12 @@ export function useAgent(workDir: string): UseAgentReturn {
   const extensionLoaderRef = useRef<ExtensionLoader | null>(null);
   const toolRegistryRef = useRef<ToolRegistry | null>(null);
   const messageIdCounter = useRef(0);
+
+  // Phase 3: Evolution refs
+  const databaseRef = useRef<CrabDatabase | null>(null);
+  const gitManagerRef = useRef<GitManager | null>(null);
+  const evolutionEngineRef = useRef<EvolutionEngine | null>(null);
+  const subagentRegistryRef = useRef<SubagentRegistry | null>(null);
 
   const currentModelRef = useRef('');
   const currentProviderRef = useRef('');
@@ -272,8 +303,10 @@ export function useAgent(workDir: string): UseAgentReturn {
         console.error('[useAgent] Extension 加载失败:', err);
       });
 
-      // 9. 初始化 Agent
+      // 9. 初始化 Agent（Phase 3: 注入 EvolutionEngine + SubagentRegistry）
       const contextBuilder = new ContextBuilder();
+
+      // 先创建 Agent（不等待进化引擎初始化）
       const agent = new Agent(
         provider,
         toolRegistry,
@@ -282,6 +315,84 @@ export function useAgent(workDir: string): UseAgentReturn {
         contextBuilder,
         config,
       );
+      agentRef.current = agent;
+
+      // Phase 3: 异步初始化 CrabDatabase + GitManager + EvolutionEngine
+      // 使用 async IIFE 避免阻塞 useEffect
+      (async () => {
+        try {
+          const database = new CrabDatabase();
+          database.initialize();
+          databaseRef.current = database;
+
+          const gitManager = new GitManager();
+          await gitManager.initialize();
+          gitManagerRef.current = gitManager;
+
+          // 获取进化分析 Provider（可能需要单独的 API Key）
+          let evolutionProvider = provider;
+          const evolutionProviderName = configManagerRef.current?.getEvolutionProviderName();
+
+          if (evolutionProviderName && evolutionProviderName !== config.defaultProvider) {
+            try {
+              const evolutionApiKey = configManagerRef.current!.getApiKey(evolutionProviderName);
+              evolutionProvider = createProvider(evolutionProviderName, evolutionApiKey);
+              if (!providerRegistryRef.current!.has(evolutionProviderName)) {
+                providerRegistryRef.current!.register(evolutionProvider);
+              }
+            } catch {
+              console.warn('[useAgent] 进化 Provider API Key 未设置，回退到主 Provider');
+            }
+          }
+
+          // 创建 SubagentDelegator
+          const subagentDelegator = new SubagentDelegator(
+            sessionManager,
+            providerRegistryRef.current!,
+            toolRegistry,
+            skillLoader,
+            contextBuilder,
+          );
+
+          // 创建 EvolutionEngine
+          const evolutionEngine = new EvolutionEngine({
+            database,
+            gitManager,
+            evolutionProvider,
+            config: config.evolutionConfig ?? {},
+            subagentDelegator,
+          });
+          evolutionEngineRef.current = evolutionEngine;
+
+          // 注册事件回调
+          evolutionEngine.onEvent((event: EvolutionEvent) => {
+            setEvolutionEvents((prev) => {
+              const updated = [event, ...prev];
+              return updated.slice(0, 20);
+            });
+
+            if (event.type === 'subagent_created') {
+              if (subagentRegistryRef.current) {
+                subagentRegistryRef.current.refresh();
+                setSubagents(subagentRegistryRef.current.list());
+              }
+            }
+          });
+
+          // 创建 SubagentLoader + SubagentRegistry
+          const subagentLoader = new SubagentLoader(expandTilde(SUBAGENTS_DIR));
+          const subagentRegistry = new SubagentRegistry(subagentLoader);
+          subagentRegistry.init();
+          subagentRegistryRef.current = subagentRegistry;
+          setSubagents(subagentRegistry.list());
+
+          // 延迟注入到 Agent
+          agent.setEvolutionEngine(evolutionEngine);
+          agent.setSubagentRegistry(subagentRegistry);
+        } catch (err) {
+          console.error('[useAgent] 进化引擎初始化失败（非致命）:', err);
+        }
+      })();
       agentRef.current = agent;
 
       currentModelRef.current = config.defaultModel;
@@ -300,6 +411,9 @@ export function useAgent(workDir: string): UseAgentReturn {
         if (extensionLoader) {
           extensionLoader.stopWatching();
         }
+        if (databaseRef.current) {
+          databaseRef.current.close();
+        }
         process.exit(0);
       };
       process.on('SIGINT', handleSigInt);
@@ -308,6 +422,9 @@ export function useAgent(workDir: string): UseAgentReturn {
         process.off('SIGINT', handleSigInt);
         if (extensionLoader) {
           extensionLoader.stopWatching();
+        }
+        if (databaseRef.current) {
+          databaseRef.current.close();
         }
       };
     } catch (err) {
@@ -423,6 +540,8 @@ export function useAgent(workDir: string): UseAgentReturn {
         skillLoader,
         contextBuilder,
         config,
+        evolutionEngineRef.current ?? undefined,
+        subagentRegistryRef.current ?? undefined,
       );
       agentRef.current = agent;
 
@@ -582,6 +701,56 @@ export function useAgent(workDir: string): UseAgentReturn {
     return skillLoaderRef.current.getExecutionHistory(skillName, { limit });
   }, []);
 
+  // ============================================================
+  // Phase 3: Evolution 相关方法
+  // ============================================================
+
+  /** 手动触发进化评估 */
+  const triggerEvolution = useCallback(async (): Promise<void> => {
+    if (!evolutionEngineRef.current) return;
+    await evolutionEngineRef.current.runFullEvaluation();
+  }, []);
+
+  /** 获取所有 Skill 评估结果 */
+  const getEvaluations = useCallback((): SkillEvaluationResult[] => {
+    if (!evolutionEngineRef.current) return [];
+    return evolutionEngineRef.current.getAllEvaluations();
+  }, []);
+
+  /** 获取检测到的模式 */
+  const getDetectedPatterns = useCallback((): PatternMatch[] => {
+    if (!evolutionEngineRef.current) return [];
+    return evolutionEngineRef.current.getDetectedPatterns();
+  }, []);
+
+  /** 获取最近经验 */
+  const getRecentExperiences = useCallback((limit = 10): Experience[] => {
+    if (!evolutionEngineRef.current) return [];
+    return evolutionEngineRef.current.getRecentExperiences(limit);
+  }, []);
+
+  /** 获取变更日志 */
+  const getChangelog = useCallback((): ChangeEntry[] => {
+    if (!evolutionEngineRef.current) return [];
+    return evolutionEngineRef.current.getChangelog();
+  }, []);
+
+  /** 获取 Subagent 指标 */
+  const getSubagentMetrics = useCallback((name: string): SubagentMetrics | null => {
+    if (!evolutionEngineRef.current) return null;
+    try {
+      return evolutionEngineRef.current.getSubagentMetrics(name);
+    } catch {
+      return null;
+    }
+  }, []);
+
+  /** 提交用户评分 */
+  const submitRating = useCallback((skillName: string, rating: number): void => {
+    if (!evolutionEngineRef.current) return;
+    evolutionEngineRef.current.submitRating(skillName, rating);
+  }, []);
+
   return {
     messages,
     isProcessing,
@@ -610,5 +779,15 @@ export function useAgent(workDir: string): UseAgentReturn {
     refreshExtensions,
     getSkillHistory,
     refreshDisplay,
+    // Phase 3
+    evolutionEvents,
+    subagents,
+    triggerEvolution,
+    getEvaluations,
+    getDetectedPatterns,
+    getRecentExperiences,
+    getChangelog,
+    getSubagentMetrics,
+    submitRating,
   };
 }

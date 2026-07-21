@@ -163,13 +163,35 @@ export interface SessionMeta {
 
 // ============ 配置类型 ============
 
-/** 配置文件结构 */
+/** 配置文件结构（Phase 3 升级） */
 export interface AppConfig {
   defaultProvider: 'openai' | 'anthropic' | 'deepseek';
   defaultModel: string;
   maxIterations: number;
   bashTimeoutMs: number;
   workDir: string;
+  /** Phase 3 新增：进化分析使用的模型 */
+  evolutionModel?: string;
+  /** Phase 3 新增：进化引擎配置 */
+  evolutionConfig?: EvolutionConfig;
+}
+
+/** 进化引擎配置（Phase 3 新增） */
+export interface EvolutionConfig {
+  /** 进化评估触发间隔（任务数），默认 10 */
+  taskInterval?: number;
+  /** Skill 版本验证窗口（执行次数），默认 3 */
+  skillValidationWindow?: number;
+  /** 经验注入 top-K，默认 3 */
+  experienceInjectionTopK?: number;
+  /** 经验注入 token 预算，默认 500 */
+  experienceInjectionTokenBudget?: number;
+  /** 用户评分采集间隔（任务数），默认 3 */
+  ratingInterval?: number;
+  /** 是否自动应用小优化，默认 true */
+  autoApplyMinorChanges?: boolean;
+  /** Subagent 模式检测阈值（同类模式次数），默认 5 */
+  subagentPatternThreshold?: number;
 }
 
 // ============ Skill 类型（Phase 2 增强） ============
@@ -214,7 +236,7 @@ export interface SkillScript {
   language: 'python' | 'shell';
 }
 
-/** Skill 执行记录 */
+/** Skill 执行记录（Phase 3 增强） */
 export interface SkillExecutionRecord {
   /** 记录 ID */
   id: string;
@@ -237,6 +259,231 @@ export interface SkillExecutionRecord {
     inputTokens: number;
     outputTokens: number;
   };
+  /** Phase 3 新增：隐式反馈（用户是否采纳了结果） */
+  adopted?: boolean;
+  /** Phase 3 新增：显式评分（1-5，0 表示未评分） */
+  rating?: number;
+  /** Phase 3 新增：版本号（执行时的 Skill 版本） */
+  skillVersion?: number;
+  /** Phase 3 新增：关联的 Session ID */
+  sessionId?: string;
+}
+
+// ============ Phase 3 新增类型 ============
+
+/** Skill 效果指标（从 SQLite 聚合计算） */
+export interface SkillMetrics {
+  /** Skill 名称 */
+  skillName: string;
+  /** 成功率（0-1） */
+  successRate: number;
+  /** 平均耗时（毫秒） */
+  avgDuration: number;
+  /** 执行次数 */
+  usageCount: number;
+  /** 用户满意度（1-5 平均分，0 表示无评分） */
+  userSatisfaction: number;
+  /** 最后使用时间 */
+  lastUsed: string;
+  /** 趋势 */
+  trend: 'improving' | 'stable' | 'declining';
+}
+
+/** Skill 评估结果 */
+export interface SkillEvaluationResult {
+  skillName: string;
+  metrics: SkillMetrics;
+  /** 是否需要优化 */
+  needsOptimization: boolean;
+  /** 触发原因 */
+  triggerReasons: string[];
+}
+
+/** 优化建议 */
+export interface OptimizationSuggestion {
+  /** 建议 ID */
+  id: string;
+  /** Skill 名称 */
+  skillName: string;
+  /** 当前版本号 */
+  currentVersion: number;
+  /** 建议严重级别 */
+  severity: 'minor' | 'major';
+  /** 段落定位（SKILL.md 中的段落标识） */
+  section: string;
+  /** 修改建议 */
+  suggestion: string;
+  /** 理由 */
+  rationale: string;
+  /** 识别的失败模式 */
+  failurePatterns: string[];
+  /** 生成时间 */
+  createdAt: string;
+}
+
+/** 经验记录（Phase 3 新增） */
+export interface Experience {
+  /** 经验 ID */
+  id: string;
+  /** 时间戳 */
+  timestamp: string;
+  /** 关联任务 ID */
+  taskId: string;
+  /** 关联 Session ID */
+  sessionId: string;
+  /** 任务描述 */
+  task: string;
+  /** 使用的 Skill（可为 null） */
+  skillUsed: string | null;
+  /** 使用的 Subagent（可为 null） */
+  subagentUsed: string | null;
+  /** 执行结果 */
+  outcome: 'success' | 'partial' | 'failure';
+  /** 执行耗时（毫秒） */
+  duration: number;
+  /** 关键学习点 */
+  keyLearnings: string[];
+  /** 标签 */
+  tags: string[];
+  /** 关联经验 ID 列表 */
+  relatedExperiences: string[];
+}
+
+/** 知识图谱边（Phase 3 新增） */
+export interface KnowledgeEdge {
+  /** 边 ID */
+  id: string;
+  /** 源经验 ID */
+  sourceId: string;
+  /** 目标经验 ID */
+  targetId: string;
+  /** 边类型 */
+  type: 'same_tag' | 'same_skill' | 'same_subagent';
+  /** 权重（共享标签数等） */
+  weight: number;
+  /** 创建时间 */
+  createdAt: string;
+}
+
+/** Subagent frontmatter（Phase 3 新增） */
+export interface SubagentFrontmatter {
+  name: string;
+  description: string;
+  /** 执行模式 */
+  mode: 'autonomous' | 'guided';
+  /** 模型（inherit 或具体模型名） */
+  model: string;
+  /** 可用工具列表 */
+  tools: string[];
+  /** 触发关键词（可选，辅助 LLM 判断） */
+  triggers?: string[];
+}
+
+/** Subagent 完整定义（Phase 3 新增） */
+export interface SubagentDefinition {
+  meta: SubagentFrontmatter;
+  /** Markdown 文件路径 */
+  path: string;
+  /** Markdown 正文内容（frontmatter 之后） */
+  content: string;
+}
+
+/** Subagent 执行记录（Phase 3 新增） */
+export interface SubagentExecutionRecord {
+  id: string;
+  subagentName: string;
+  timestamp: string;
+  task: string;
+  sessionId: string;
+  /** 分支叶节点 ID（fork 的子分支） */
+  branchLeafId: string;
+  duration: number;
+  outcome: 'success' | 'partial' | 'failure';
+  summary: string;
+}
+
+/** Subagent 指标（Phase 3 新增） */
+export interface SubagentMetrics {
+  subagentName: string;
+  delegationCount: number;
+  successRate: number;
+  avgDuration: number;
+  /** 委派准确率（LLM 判断是否正确的委派） */
+  delegationAccuracy: number;
+  lastUsed: string;
+}
+
+/** 模式检测结果（Phase 3 新增） */
+export interface PatternMatch {
+  /** 模式签名（任务类型 + 工具组合的 hash） */
+  signature: string;
+  /** 匹配的任务记录 */
+  matchingTasks: TaskRecord[];
+  /** 出现次数 */
+  count: number;
+  /** 建议的 Subagent 名称 */
+  suggestedName: string;
+  /** 建议的描述 */
+  suggestedDescription: string;
+}
+
+/** 任务执行记录（用于模式检测，Phase 3 新增） */
+export interface TaskRecord {
+  taskId: string;
+  task: string;
+  toolsUsed: string[];
+  skillUsed: string | null;
+  outcome: string;
+  timestamp: string;
+}
+
+/** 变更日志条目（Phase 3 新增） */
+export interface ChangeEntry {
+  /** 变更类型 */
+  type: 'skill_optimize' | 'skill_rollback' | 'skill_validate' | 'subagent_create' | 'subagent_optimize';
+  /** 目标名称（Skill 或 Subagent 名） */
+  target: string;
+  /** 版本号 */
+  version: number;
+  /** 变更描述 */
+  description: string;
+  /** Git commit hash */
+  commitHash?: string;
+  /** 时间戳 */
+  timestamp: string;
+}
+
+/** 进化引擎事件（通知 CLI 层，Phase 3 新增） */
+export type EvolutionEvent =
+  | { type: 'optimization_proposed'; suggestion: OptimizationSuggestion; skillName: string }
+  | { type: 'optimization_applied'; skillName: string; version: number }
+  | { type: 'rollback'; skillName: string; version: number; reason: string }
+  | { type: 'subagent_proposed'; pattern: PatternMatch }
+  | { type: 'subagent_created'; name: string }
+  | { type: 'experience_extracted'; experience: Experience }
+  | { type: 'rating_request'; taskDescription: string }
+  | { type: 'evaluation_complete'; summary: string };
+
+/** 进化事件回调（Phase 3 新增） */
+export type EvolutionEventCallback = (event: EvolutionEvent) => void;
+
+/** 任务信息（传给 onTaskComplete，Phase 3 新增） */
+export interface TaskInfo {
+  task: string;
+  skillUsed: string | null;
+  subagentUsed: string | null;
+  outcome: 'success' | 'partial' | 'failure';
+  duration: number;
+  toolsUsed: string[];
+  sessionId: string;
+}
+
+/** Git 日志条目（Phase 3 新增） */
+export interface GitLogEntry {
+  hash: string;
+  message: string;
+  author: string;
+  timestamp: string;
 }
 
 // ============ Extension 类型（Phase 2 新增） ============

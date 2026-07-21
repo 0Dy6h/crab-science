@@ -79,7 +79,7 @@ describe('常量值验证', () => {
     expect(ENV_KEY_PREFIX).toBe('CRAB_SCIENCE');
   });
 
-  it('VERSION 应为 0.2.0', () => {
-    expect(VERSION).toBe('0.2.0');
+  it('VERSION 应为 0.3.0', () => {
+    expect(VERSION).toBe('0.3.0');
   });
 });

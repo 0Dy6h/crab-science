@@ -118,6 +118,24 @@ export class CommandHandler {
       case 'sh':
         return this.handleSkillHistory(args[0], args[1]);
 
+      // Phase 3 新增命令
+      case 'evolve':
+        return this.handleEvolve();
+
+      case 'subagents':
+      case 'sa':
+        return this.handleSubagents(args[0]);
+
+      case 'experience':
+      case 'exp':
+        return this.handleExperience(args[0]);
+
+      case 'changelog':
+        return this.handleChangelog();
+
+      case 'rate':
+        return this.handleRate(args[0], args[1]);
+
       case 'exit':
       case 'quit':
         return { handled: true, exit: true };
@@ -476,6 +494,138 @@ export class CommandHandler {
     };
   }
 
+  // ============================================================
+  // Phase 3 新增命令处理
+  // ============================================================
+
+  /** /evolve — 手动触发进化评估 */
+  private handleEvolve(): CommandResult {
+    // 异步执行
+    this.agent.triggerEvolution().then(() => {
+      console.log('\n✓ 进化评估已完成');
+    }).catch((err) => {
+      console.log('\n✗ 进化评估失败:', err);
+    });
+
+    return {
+      handled: true,
+      output: '正在执行进化评估（Skill 评估 → Subagent 检测 → 经验提取）...',
+    };
+  }
+
+  /** /subagents [name] — 列出 Subagent 或查看指定 Subagent 指标 */
+  private handleSubagents(name?: string): CommandResult {
+    const subagents = this.agent.subagents;
+
+    if (subagents.length === 0 && !name) {
+      return {
+        handled: true,
+        output: '暂无可用 Subagent。\n提示: 系统会在积累足够执行数据后自动检测模式并创建 Subagent。',
+      };
+    }
+
+    if (name) {
+      // 查看指定 Subagent 指标
+      const metrics = this.agent.getSubagentMetrics(name);
+      if (!metrics) {
+        return { handled: true, output: `Subagent "${name}" 暂无执行记录。` };
+      }
+
+      const lines = [
+        `Subagent: ${name}`,
+        `  委派次数: ${metrics.delegationCount}`,
+        `  成功率: ${(metrics.successRate * 100).toFixed(1)}%`,
+        `  平均耗时: ${(metrics.avgDuration / 1000).toFixed(1)}s`,
+        `  委派准确率: ${(metrics.delegationAccuracy * 100).toFixed(1)}%`,
+        `  最后使用: ${metrics.lastUsed || '从未使用'}`,
+      ];
+
+      return { handled: true, output: lines.join('\n') };
+    }
+
+    // 列出所有 Subagent
+    const lines = subagents.map(
+      (s) => `  - ${s.name}: ${s.description} (mode: ${s.mode}, model: ${s.model})`,
+    );
+    return {
+      handled: true,
+      output: `可用 Subagent (${subagents.length}):\n${lines.join('\n')}`,
+    };
+  }
+
+  /** /experience [limit] — 查看最近经验 */
+  private handleExperience(limitArg?: string): CommandResult {
+    const limit = limitArg ? parseInt(limitArg, 10) || 10 : 10;
+    const experiences = this.agent.getRecentExperiences(limit);
+
+    if (experiences.length === 0) {
+      return { handled: true, output: '暂无经验记录。' };
+    }
+
+    const lines = experiences.map((exp, i) => {
+      const outcomeIcon =
+        exp.outcome === 'success' ? '✓' :
+        exp.outcome === 'partial' ? '◐' : '✗';
+      const task = exp.task.length > 50 ? exp.task.substring(0, 50) + '...' : exp.task;
+      const learnings = exp.keyLearnings.length > 0
+        ? `\n      关键经验: ${exp.keyLearnings.slice(0, 2).join('; ')}`
+        : '';
+      const tags = exp.tags.length > 0 ? `\n      标签: ${exp.tags.join(', ')}` : '';
+      const skill = exp.skillUsed ? ` | skill: ${exp.skillUsed}` : '';
+      return `  [${i}] ${outcomeIcon} ${exp.timestamp} | ${task}${skill}${learnings}${tags}`;
+    });
+
+    return {
+      handled: true,
+      output: `最近经验 (${experiences.length} 条):\n${lines.join('\n')}`,
+    };
+  }
+
+  /** /changelog — 查看进化变更日志 */
+  private handleChangelog(): CommandResult {
+    const changelog = this.agent.getChangelog();
+
+    if (changelog.length === 0) {
+      return { handled: true, output: '暂无进化变更记录。' };
+    }
+
+    const lines = changelog.slice(0, 20).map((entry, i) => {
+      const typeIcon =
+        entry.type === 'skill_optimize' ? '⚡' :
+        entry.type === 'skill_rollback' ? '↩' :
+        entry.type === 'skill_validate' ? '✓' :
+        entry.type === 'subagent_create' ? '🤖' :
+        entry.type === 'subagent_optimize' ? '🔧' : '•';
+      const hash = entry.commitHash ? ` (${entry.commitHash.substring(0, 8)})` : '';
+      return `  [${i}] ${typeIcon} ${entry.type} | ${entry.target} v${entry.version}${hash} — ${entry.timestamp}\n      ${entry.description}`;
+    });
+
+    return {
+      handled: true,
+      output: `进化变更日志 (${changelog.length} 条，显示最近 ${Math.min(20, changelog.length)} 条):\n${lines.join('\n')}`,
+    };
+  }
+
+  /** /rate <skill> <1-5> — 为 Skill 评分 */
+  private handleRate(skillName?: string, ratingArg?: string): CommandResult {
+    if (!skillName || !ratingArg) {
+      const skills = this.agent.skills;
+      const lines = skills.map((s) => `  - ${s.name}: ${s.description}`);
+      return {
+        handled: true,
+        output: `用法: /rate <skill-name> <1-5>\n可用 Skills:\n${lines.join('\n')}`,
+      };
+    }
+
+    const rating = parseInt(ratingArg, 10);
+    if (isNaN(rating) || rating < 1 || rating > 5) {
+      return { handled: true, output: '评分必须是 1-5 的整数。' };
+    }
+
+    this.agent.submitRating(skillName, rating);
+    return { handled: true, output: `已为 Skill "${skillName}" 提交评分: ${rating}/5` };
+  }
+
   /** /help */
   private handleHelp(): CommandResult {
     return {
@@ -501,6 +651,14 @@ export class CommandHandler {
         '  /skills            列出已安装 Skills',
         '  /skill-history <name> [n]  查看 Skill 执行历史',
         '  /extensions        列出已加载 Extensions',
+        '',
+        '  进化机制 (Phase 3):',
+        '  /evolve            手动触发进化评估',
+        '  /subagents         列出可用 Subagent',
+        '  /subagents <name>  查看 Subagent 指标',
+        '  /experience [n]    查看最近经验',
+        '  /changelog         查看进化变更日志',
+        '  /rate <skill> <1-5>  为 Skill 评分',
         '',
         '  其他:',
         '  /config            查看当前配置',

@@ -53,6 +53,53 @@ export const SKILL_SCRIPTS_GLOB = '*.{py,sh}';
 /** 系统提示词最大 token 数 */
 export const MAX_SYSTEM_PROMPT_TOKENS = 1500;
 
+// ============ Phase 3 新增常量 ============
+
+/** Phase 3 系统提示词最大 token 数（上调以容纳 subagent 描述 + 经验注入） */
+export const MAX_SYSTEM_PROMPT_TOKENS_PHASE3 = 2000;
+
+/** SQLite 数据库路径 */
+export const SQLITE_DB_PATH = '~/.crab-science/crab-science.db';
+
+/** Subagents 目录 */
+export const SUBAGENTS_DIR = '~/.crab-science/subagents';
+
+/** 默认进化分析模型 */
+export const DEFAULT_EVOLUTION_MODEL = 'deepseek-chat';
+
+/** 进化评估触发间隔（任务数） */
+export const EVOLUTION_TASK_INTERVAL = 10;
+
+/** Skill 版本验证窗口（执行次数） */
+export const SKILL_VALIDATION_WINDOW = 3;
+
+/** 经验注入 top-K */
+export const EXPERIENCE_INJECTION_TOP_K = 3;
+
+/** 经验注入 token 预算 */
+export const EXPERIENCE_INJECTION_TOKEN_BUDGET = 500;
+
+/** Skill 优化 — 成功率阈值 */
+export const SKILL_OPTIMIZATION_SUCCESS_RATE_THRESHOLD = 0.7;
+
+/** Skill 优化 — 耗时上升阈值 */
+export const SKILL_OPTIMIZATION_DURATION_INCREASE_THRESHOLD = 0.2;
+
+/** Skill 优化 — 满意度阈值 */
+export const SKILL_OPTIMIZATION_SATISFACTION_THRESHOLD = 3.5;
+
+/** Skill 回滚 — 成功率下降阈值 */
+export const SKILL_ROLLBACK_SUCCESS_RATE_DROP = 0.15;
+
+/** Skill 回滚 — 满意度下降阈值 */
+export const SKILL_ROLLBACK_SATISFACTION_DROP = 0.5;
+
+/** Subagent 模式检测阈值 */
+export const SUBAGENT_PATTERN_THRESHOLD = 5;
+
+/** 用户评分采集间隔（任务数） */
+export const RATING_INTERVAL = 3;
+
 /** 大文件截断行数 */
 export const MAX_FILE_LINES = 500;
 
@@ -66,4 +113,4 @@ export const GLOB_PREVIEW_LINES = 10;
 export const ENV_KEY_PREFIX = 'CRAB_SCIENCE';
 
 /** 版本号 */
-export const VERSION = '0.2.0';
+export const VERSION = '0.3.0';

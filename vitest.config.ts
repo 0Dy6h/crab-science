@@ -7,6 +7,8 @@ export default defineConfig({
       '@crab-science/shared': resolve(__dirname, 'packages/shared/src/index.ts'),
       '@crab-science/llm-layer': resolve(__dirname, 'packages/llm-layer/src/index.ts'),
       '@crab-science/agent-core': resolve(__dirname, 'packages/agent-core/src/index.ts'),
+      '@crab-science/storage': resolve(__dirname, 'packages/storage/src/index.ts'),
+      '@crab-science/evolution-engine': resolve(__dirname, 'packages/evolution-engine/src/index.ts'),
     },
     extensionAlias: {
       '.js': ['.ts', '.js'],

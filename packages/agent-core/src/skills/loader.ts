@@ -15,6 +15,7 @@ import {
   generateId,
   nowISO,
 } from '@crab-science/shared';
+import type { SkillMetricsRepository } from '@crab-science/storage';
 import type { SkillFrontmatter } from './types.js';
 import { SkillExecutionLogger } from './execution-logger.js';
 
@@ -37,7 +38,12 @@ export class SkillLoader {
   private cache = new Map<string, Skill>();
   private executionLogger: SkillExecutionLogger;
 
-  constructor(skillsDirs?: string[], projectRoot?: string) {
+  /**
+   * @param skillsDirs - skill 搜索目录（可选）
+   * @param projectRoot - 项目根目录（可选）
+   * @param skillMetricsRepo - SQLite 仓库（可选，Phase 3 新增）
+   */
+  constructor(skillsDirs?: string[], projectRoot?: string, skillMetricsRepo?: SkillMetricsRepository) {
     if (skillsDirs && skillsDirs.length > 0) {
       this.skillsDirs = skillsDirs;
     } else {
@@ -49,7 +55,14 @@ export class SkillLoader {
         expandTilde(GLOBAL_SKILLS_DIR),
       ];
     }
-    this.executionLogger = new SkillExecutionLogger(this.skillsDirs);
+    this.executionLogger = new SkillExecutionLogger(this.skillsDirs, skillMetricsRepo);
+  }
+
+  /**
+   * 设置 SQLite 仓库（延迟注入，Phase 3 新增）
+   */
+  setSkillMetricsRepo(repo: SkillMetricsRepository): void {
+    this.executionLogger.setSkillMetricsRepo(repo);
   }
 
   /**

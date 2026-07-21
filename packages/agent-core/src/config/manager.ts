@@ -7,6 +7,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_BASH_TIMEOUT_MS,
+  DEFAULT_EVOLUTION_MODEL,
   ENV_KEY_PREFIX,
   expandTilde,
 } from '@crab-science/shared';
@@ -119,6 +120,29 @@ export class ConfigManager {
       errors.push('workDir 不能为空');
     }
 
+    // Phase 3: 校验 evolutionConfig
+    if (config.evolutionConfig) {
+      const ec = config.evolutionConfig;
+      if (ec.taskInterval !== undefined && ec.taskInterval < 1) {
+        errors.push(`evolutionConfig.taskInterval 必须 >= 1，当前: ${ec.taskInterval}`);
+      }
+      if (ec.skillValidationWindow !== undefined && ec.skillValidationWindow < 1) {
+        errors.push(`evolutionConfig.skillValidationWindow 必须 >= 1，当前: ${ec.skillValidationWindow}`);
+      }
+      if (ec.experienceInjectionTopK !== undefined && ec.experienceInjectionTopK < 1) {
+        errors.push(`evolutionConfig.experienceInjectionTopK 必须 >= 1，当前: ${ec.experienceInjectionTopK}`);
+      }
+      if (ec.experienceInjectionTokenBudget !== undefined && ec.experienceInjectionTokenBudget < 100) {
+        errors.push(`evolutionConfig.experienceInjectionTokenBudget 必须 >= 100，当前: ${ec.experienceInjectionTokenBudget}`);
+      }
+      if (ec.ratingInterval !== undefined && ec.ratingInterval < 1) {
+        errors.push(`evolutionConfig.ratingInterval 必须 >= 1，当前: ${ec.ratingInterval}`);
+      }
+      if (ec.subagentPatternThreshold !== undefined && ec.subagentPatternThreshold < 2) {
+        errors.push(`evolutionConfig.subagentPatternThreshold 必须 >= 2，当前: ${ec.subagentPatternThreshold}`);
+      }
+    }
+
     // 检查 API Key
     try {
       this.getApiKey(config.defaultProvider);
@@ -139,6 +163,8 @@ export class ConfigManager {
       maxIterations: DEFAULT_MAX_ITERATIONS,
       bashTimeoutMs: DEFAULT_BASH_TIMEOUT_MS,
       workDir: process.cwd(),
+      evolutionModel: DEFAULT_EVOLUTION_MODEL,
+      evolutionConfig: {},
     };
   }
 
@@ -150,5 +176,27 @@ export class ConfigManager {
     const updated = { ...current, ...partial };
     this.save(updated);
     return updated;
+  }
+
+  /**
+   * 获取进化分析使用的模型名称
+   * 如果未配置 evolutionModel，回退到 defaultModel
+   */
+  getEvolutionModel(): string {
+    const config = this.load();
+    return config.evolutionModel ?? config.defaultModel;
+  }
+
+  /**
+   * 根据 evolutionModel 推断 Provider 名称
+   * claude-* → anthropic, gpt-* → openai, deepseek-* → deepseek
+   * 如果无法推断，回退到 defaultProvider
+   */
+  getEvolutionProviderName(): string {
+    const model = this.getEvolutionModel();
+    if (model.startsWith('claude')) return 'anthropic';
+    if (model.startsWith('gpt')) return 'openai';
+    if (model.startsWith('deepseek')) return 'deepseek';
+    return this.load().defaultProvider;
   }
 }

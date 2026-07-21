@@ -1,0 +1,416 @@
+%% Crab-Science Phase 3 类图
+%% 版本: v3.0
+%% 日期: 2026-07-20
+%% 作者: 高见远（架构师）
+
+classDiagram
+    direction TB
+
+    %% ========== shared 包（Phase 3 变更） ==========
+
+    class AppConfig {
+        +defaultProvider: string
+        +defaultModel: string
+        +maxIterations: number
+        +bashTimeoutMs: number
+        +workDir: string
+        +evolutionModel?: string
+        +evolutionConfig?: EvolutionConfig
+    }
+
+    class EvolutionConfig {
+        +taskInterval?: number
+        +skillValidationWindow?: number
+        +experienceInjectionTopK?: number
+        +experienceInjectionTokenBudget?: number
+        +ratingInterval?: number
+        +autoApplyMinorChanges?: boolean
+        +subagentPatternThreshold?: number
+    }
+
+    class SkillExecutionRecord {
+        +id: string
+        +skillName: string
+        +timestamp: string
+        +task: string
+        +steps: string[]
+        +durationMs: number
+        +status: string
+        +error?: string
+        +tokenUsage?: object
+        +adopted?: boolean
+        +rating?: number
+        +skillVersion?: number
+        +sessionId?: string
+    }
+
+    class SkillMetrics {
+        +skillName: string
+        +successRate: number
+        +avgDuration: number
+        +usageCount: number
+        +userSatisfaction: number
+        +lastUsed: string
+        +trend: string
+    }
+
+    class SkillEvaluationResult {
+        +skillName: string
+        +metrics: SkillMetrics
+        +needsOptimization: boolean
+        +triggerReasons: string[]
+    }
+
+    class OptimizationSuggestion {
+        +id: string
+        +skillName: string
+        +currentVersion: number
+        +severity: string
+        +section: string
+        +suggestion: string
+        +rationale: string
+        +failurePatterns: string[]
+        +createdAt: string
+    }
+
+    class Experience {
+        +id: string
+        +timestamp: string
+        +taskId: string
+        +sessionId: string
+        +task: string
+        +skillUsed: string|null
+        +subagentUsed: string|null
+        +outcome: string
+        +duration: number
+        +keyLearnings: string[]
+        +tags: string[]
+        +relatedExperiences: string[]
+    }
+
+    class KnowledgeEdge {
+        +id: string
+        +sourceId: string
+        +targetId: string
+        +type: string
+        +weight: number
+        +createdAt: string
+    }
+
+    class SubagentFrontmatter {
+        +name: string
+        +description: string
+        +mode: string
+        +model: string
+        +tools: string[]
+        +triggers?: string[]
+    }
+
+    class SubagentDefinition {
+        +meta: SubagentFrontmatter
+        +path: string
+        +content: string
+    }
+
+    class SubagentMetrics {
+        +subagentName: string
+        +delegationCount: number
+        +successRate: number
+        +avgDuration: number
+        +delegationAccuracy: number
+        +lastUsed: string
+    }
+
+    class PatternMatch {
+        +signature: string
+        +matchingTasks: TaskRecord[]
+        +count: number
+        +suggestedName: string
+        +suggestedDescription: string
+    }
+
+    class ChangeEntry {
+        +type: string
+        +target: string
+        +version: number
+        +description: string
+        +commitHash?: string
+        +timestamp: string
+    }
+
+    class EvolutionEvent {
+        <<union type>>
+        optimization_proposed
+        optimization_applied
+        rollback
+        subagent_proposed
+        subagent_created
+        experience_extracted
+        rating_request
+        evaluation_complete
+    }
+
+    %% ========== storage 包 ==========
+
+    class Database {
+        -db: better-sqlite3.Database
+        -dbPath: string
+        +initialize(): void
+        +getDatabase(): Database
+        +close(): void
+        -runMigrations(): void
+    }
+
+    class ExperienceRepository {
+        -db: Database
+        +insert(experience): Experience
+        +findById(id): Experience|null
+        +findByTags(tags, limit?): Experience[]
+        +findBySkill(skillName, limit?): Experience[]
+        +findByTaskKeywords(keywords, limit?): Experience[]
+        +updateRelatedExperiences(id, relatedIds): void
+        +getRecent(limit): Experience[]
+    }
+
+    class SkillMetricsRepository {
+        -db: Database
+        +insertExecution(record): SkillExecutionRecord
+        +queryExecutions(skillName, options?): SkillExecutionRecord[]
+        +getMetrics(skillName): SkillMetrics
+        +updateExecution(id, updates): void
+        +getVersionComparison(skillName, v1, v2): object
+    }
+
+    class KnowledgeRepository {
+        -db: Database
+        +addEdge(edge): KnowledgeEdge
+        +findEdges(experienceId): KnowledgeEdge[]
+        +findRelated(experienceId, limit?): Experience[]
+        +edgeExists(sourceId, targetId, type): boolean
+    }
+
+    class GitManager {
+        -repoDir: string
+        -fs: typeof fs
+        +initialize(): Promise~void~
+        +commit(filePath, message): Promise~string~
+        +commitMultiple(filePaths, message): Promise~string~
+        +diff(filePath, fromHash?): Promise~string~
+        +checkout(filePath, commitHash): Promise~void~
+        +log(filePath, limit?): Promise~GitLogEntry[]~
+        +isInitialized(): boolean
+    }
+
+    %% ========== evolution-engine 包 ==========
+
+    class EvolutionEngine {
+        -metricsEvaluator: SkillMetricsEvaluator
+        -skillOptimizer: SkillOptimizer
+        -skillVersioner: SkillVersioner
+        -skillValidator: SkillValidator
+        -patternDetector: PatternDetector
+        -subagentCreator: SubagentCreator
+        -subagentDelegator: SubagentDelegator
+        -subagentEvaluator: SubagentEvaluator
+        -experienceExtractor: ExperienceExtractor
+        -knowledgeGraph: KnowledgeGraph
+        -knowledgeRetriever: KnowledgeRetriever
+        -config: EvolutionConfig
+        -taskCount: number
+        -eventCallback?: EvolutionEventCallback
+        +onEvent(callback): void
+        +onTaskComplete(session, taskInfo): Promise~void~
+        +getRelevantExperiences(taskDescription): Experience[]
+        +evaluate(): Promise~string~
+        +getSkillMetrics(skillName): SkillMetrics
+        +getChangelog(limit?): ChangeEntry[]
+    }
+
+    class SkillMetricsEvaluator {
+        -skillMetricsRepo: SkillMetricsRepository
+        -config: EvolutionConfig
+        +evaluate(skillName): SkillEvaluationResult
+        +evaluateAll(): SkillEvaluationResult[]
+        +needsOptimization(metrics): object
+    }
+
+    class SkillOptimizer {
+        -provider: LLMProvider
+        -skillMetricsRepo: SkillMetricsRepository
+        +generateSuggestion(skillName, evaluation): Promise~OptimizationSuggestion~
+        -identifyFailurePatterns(records): string[]
+    }
+
+    class SkillVersioner {
+        -gitManager: GitManager
+        -skillLoader: SkillLoader
+        +applySuggestion(suggestion): Promise~object~
+        +rollback(skillName, targetVersion): Promise~string~
+        +getDiff(skillName, fromVersion?): Promise~string~
+        +getVersionHistory(skillName): Promise~GitLogEntry[]~
+        -bumpVersion(skillPath): number
+        -appendChangelog(entry): void
+    }
+
+    class SkillValidator {
+        -skillMetricsRepo: SkillMetricsRepository
+        -skillVersioner: SkillVersioner
+        -config: EvolutionConfig
+        +checkValidationStatus(skillName): object
+        +validate(skillName): Promise~object~
+    }
+
+    class PatternDetector {
+        -skillMetricsRepo: SkillMetricsRepository
+        -config: EvolutionConfig
+        +detect(): PatternMatch[]
+        -extractSignature(task): string
+    }
+
+    class SubagentCreator {
+        -provider: LLMProvider
+        +createDraft(pattern): Promise~SubagentDefinition~
+        +save(subagent): Promise~string~
+        +create(subagent): Promise~string~
+    }
+
+    class SubagentDelegator {
+        -sessionManager: SessionManager
+        -providerRegistry: ProviderRegistry
+        -toolRegistry: ToolRegistry
+        -skillLoader: SkillLoader
+        +delegate(session, subagent, task): Promise~object~
+    }
+
+    class SubagentEvaluator {
+        -database: Database
+        +evaluate(subagentName): SubagentMetrics
+        +needsOptimization(metrics): object
+    }
+
+    class ExperienceExtractor {
+        -provider: LLMProvider
+        -experienceRepo: ExperienceRepository
+        +extract(session, taskInfo): Promise~Experience~
+        -analyzeExecution(session, taskInfo): Promise~object~
+    }
+
+    class KnowledgeGraph {
+        -knowledgeRepo: KnowledgeRepository
+        -experienceRepo: ExperienceRepository
+        +buildEdgesForExperience(experience): void
+        +findRelated(experienceId, limit?): Experience[]
+    }
+
+    class KnowledgeRetriever {
+        -experienceRepo: ExperienceRepository
+        -knowledgeRepo: KnowledgeRepository
+        -config: EvolutionConfig
+        +retrieve(taskDescription, topK?): Experience[]
+        +formatForInjection(experiences): string
+        -checkTokenBudget(text): boolean
+    }
+
+    %% ========== agent-core 包（Phase 3 变更） ==========
+
+    class SubagentRegistry {
+        -loader: SubagentLoader
+        -subagents: Map
+        +discover(): SubagentDefinition[]
+        +get(name): SubagentDefinition|null
+        +getMetadataForPrompt(): string
+        +refresh(): void
+    }
+
+    class SubagentLoader {
+        -subagentsDir: string
+        +load(name): SubagentDefinition|null
+        +loadAll(): SubagentDefinition[]
+    }
+
+    class Agent {
+        -provider: LLMProvider
+        -toolRegistry: ToolRegistry
+        -sessionManager: SessionManager
+        -skillLoader: SkillLoader
+        -contextBuilder: ContextBuilder
+        -config: AppConfig
+        -evolutionEngine?: EvolutionEngine
+        -subagentRegistry?: SubagentRegistry
+        +run(session, userInput): AsyncGenerator~AgentEvent~
+    }
+
+    class ContextBuilder {
+        -systemPromptBuilder: SystemPromptBuilder
+        -knowledgeRetriever?: KnowledgeRetriever
+        +build(session, skills, config, extTools?, subagents?): BuildResult
+        -extractPathMessages(session): Message[]
+    }
+
+    class SystemPromptBuilder {
+        +build(skills, config, extTools?, subagents?, experiences?): string
+        -buildRole(): string
+        -buildToolDescriptions(extensions): string
+        -buildSkillMetadata(skills): string
+        -buildSubagentMetadata(subagents): string
+        -buildExperienceInjection(experiences): string
+        -buildPrinciples(config): string
+        -trimPrompt(parts, ...): string
+    }
+
+    class SkillExecutionLogger {
+        -skillsDirs: string[]
+        -skillMetricsRepo?: SkillMetricsRepository
+        +log(skillName, record): void
+        +query(skillName, options?): SkillExecutionRecord[]
+        +updateExecution(id, updates): void
+    }
+
+    %% ========== 关系 ==========
+
+    AppConfig --> EvolutionConfig
+    SkillEvaluationResult --> SkillMetrics
+
+    Database --> ExperienceRepository : provides db
+    Database --> SkillMetricsRepository : provides db
+    Database --> KnowledgeRepository : provides db
+
+    GitManager ..> SkillVersioner : used by
+
+    EvolutionEngine --> SkillMetricsEvaluator
+    EvolutionEngine --> SkillOptimizer
+    EvolutionEngine --> SkillVersioner
+    EvolutionEngine --> SkillValidator
+    EvolutionEngine --> PatternDetector
+    EvolutionEngine --> SubagentCreator
+    EvolutionEngine --> SubagentDelegator
+    EvolutionEngine --> SubagentEvaluator
+    EvolutionEngine --> ExperienceExtractor
+    EvolutionEngine --> KnowledgeGraph
+    EvolutionEngine --> KnowledgeRetriever
+
+    SkillMetricsEvaluator --> SkillMetricsRepository : queries
+    SkillOptimizer --> SkillMetricsRepository : queries
+    SkillOptimizer ..> LLMProvider : uses
+    SkillVersioner --> GitManager : commits
+    SkillValidator --> SkillMetricsRepository : queries
+    SkillValidator --> SkillVersioner : rollback
+
+    SubagentDelegator --> SessionManager : fork + summarize
+    SubagentDelegator ..> LLMProvider : uses
+
+    ExperienceExtractor ..> LLMProvider : uses
+    ExperienceExtractor --> ExperienceRepository : writes
+    KnowledgeGraph --> KnowledgeRepository : writes
+    KnowledgeGraph --> ExperienceRepository : queries
+    KnowledgeRetriever --> ExperienceRepository : queries
+    KnowledgeRetriever --> KnowledgeRepository : queries
+
+    Agent --> EvolutionEngine : onTaskComplete
+    Agent --> SubagentRegistry : discover
+    ContextBuilder --> KnowledgeRetriever : retrieve
+    ContextBuilder --> SystemPromptBuilder : delegates
+    SubagentRegistry --> SubagentLoader : delegates
+    SubagentDefinition --> SubagentFrontmatter
+
+    SkillExecutionLogger --> SkillMetricsRepository : optional write
