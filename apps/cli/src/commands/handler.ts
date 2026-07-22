@@ -1,5 +1,5 @@
 import type { UseAgentReturn } from '../hooks/use-agent.js';
-import type { SessionNode } from '@crab-science/shared';
+import type { ChangeEntry, Experience, SessionNode } from '@crab-science/shared';
 
 /** 命令处理结果 */
 export interface CommandResult {
@@ -130,8 +130,14 @@ export class CommandHandler {
       case 'exp':
         return this.handleExperience(args[0]);
 
+      case 'knowledge':
+        return this.handleKnowledge(args);
+
       case 'changelog':
         return this.handleChangelog();
+
+      case 'versions':
+        return this.handleVersions(args[0]);
 
       case 'rate':
         return this.handleRate(args[0], args[1]);
@@ -562,6 +568,71 @@ export class CommandHandler {
       return { handled: true, output: '暂无经验记录。' };
     }
 
+    return {
+      handled: true,
+      output: this.formatExperiences(
+        `最近经验 (${experiences.length} 条):`,
+        experiences,
+      ),
+    };
+  }
+
+  /** /knowledge [search <keyword>] — PRD 命令名，查看或搜索经验 */
+  private handleKnowledge(args: string[]): CommandResult {
+    const subCmd = args[0]?.toLowerCase();
+
+    if (subCmd === 'search') {
+      const keyword = args.slice(1).join(' ').trim();
+      if (!keyword) {
+        return {
+          handled: true,
+          output: '用法: /knowledge search <keyword>',
+        };
+      }
+      return this.handleKnowledgeSearch(keyword);
+    }
+
+    if (subCmd === 'view') {
+      return {
+        handled: true,
+        output: '用法: /knowledge search <keyword>\n当前版本支持最近经验列表和关键词搜索。',
+      };
+    }
+
+    return this.handleExperience(args[0]);
+  }
+
+  /** /knowledge search <keyword> — 搜索最近经验 */
+  private handleKnowledgeSearch(keyword: string): CommandResult {
+    const experiences = this.agent.getRecentExperiences(50);
+    const needle = keyword.toLowerCase();
+    const filtered = experiences.filter((exp) =>
+      [
+        exp.task,
+        exp.skillUsed ?? '',
+        exp.subagentUsed ?? '',
+        ...exp.keyLearnings,
+        ...exp.tags,
+      ].some((text) => text.toLowerCase().includes(needle)),
+    );
+
+    if (filtered.length === 0) {
+      return {
+        handled: true,
+        output: `知识搜索 "${keyword}" 无匹配经验。`,
+      };
+    }
+
+    return {
+      handled: true,
+      output: this.formatExperiences(
+        `知识搜索 "${keyword}" (${filtered.length} 条):`,
+        filtered,
+      ),
+    };
+  }
+
+  private formatExperiences(title: string, experiences: Experience[]): string {
     const lines = experiences.map((exp, i) => {
       const outcomeIcon =
         exp.outcome === 'success' ? '✓' :
@@ -575,10 +646,7 @@ export class CommandHandler {
       return `  [${i}] ${outcomeIcon} ${exp.timestamp} | ${task}${skill}${learnings}${tags}`;
     });
 
-    return {
-      handled: true,
-      output: `最近经验 (${experiences.length} 条):\n${lines.join('\n')}`,
-    };
+    return `${title}\n${lines.join('\n')}`;
   }
 
   /** /changelog — 查看进化变更日志 */
@@ -604,6 +672,43 @@ export class CommandHandler {
       handled: true,
       output: `进化变更日志 (${changelog.length} 条，显示最近 ${Math.min(20, changelog.length)} 条):\n${lines.join('\n')}`,
     };
+  }
+
+  /** /versions <skill-name> — PRD 命令名，查看 Skill 版本历史 */
+  private handleVersions(skillName?: string): CommandResult {
+    const changelog = this.agent.getChangelog();
+
+    if (!skillName) {
+      const targets = [...new Set(changelog.map((entry) => entry.target))];
+      const targetLines =
+        targets.length > 0
+          ? `\n已有变更目标:\n${targets.map((target) => `  - ${target}`).join('\n')}`
+          : '';
+      return {
+        handled: true,
+        output: `用法: /versions <skill-name>${targetLines}`,
+      };
+    }
+
+    const entries = changelog.filter((entry) => entry.target === skillName);
+    if (entries.length === 0) {
+      return {
+        handled: true,
+        output: `Skill "${skillName}" 暂无版本历史。`,
+      };
+    }
+
+    return {
+      handled: true,
+      output: `${skillName} 版本历史 (${entries.length} 条):\n${this.formatChangelogEntries(entries)}`,
+    };
+  }
+
+  private formatChangelogEntries(entries: ChangeEntry[]): string {
+    return entries.map((entry, i) => {
+      const hash = entry.commitHash ? ` (${entry.commitHash.substring(0, 8)})` : '';
+      return `  [${i}] ${entry.type} | ${entry.target} v${entry.version}${hash} — ${entry.timestamp}\n      ${entry.description}`;
+    }).join('\n');
   }
 
   /** /rate <skill> <1-5> — 为 Skill 评分 */
@@ -656,8 +761,10 @@ export class CommandHandler {
         '  /evolve            手动触发进化评估',
         '  /subagents         列出可用 Subagent',
         '  /subagents <name>  查看 Subagent 指标',
-        '  /experience [n]    查看最近经验',
-        '  /changelog         查看进化变更日志',
+        '  /knowledge [n]     查看最近经验（/experience 别名仍可用）',
+        '  /knowledge search <keyword>  搜索经验',
+        '  /versions <skill>  查看 Skill 版本历史（基于进化变更日志）',
+        '  /changelog         查看完整进化变更日志',
         '  /rate <skill> <1-5>  为 Skill 评分',
         '',
         '  其他:',

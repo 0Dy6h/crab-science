@@ -1,10 +1,13 @@
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { ToolParameterSchema, ToolResult, ToolContext } from '@crab-science/shared';
 import { DEFAULT_BASH_TIMEOUT_MS, MAX_TOOL_OUTPUT_LINES, truncateOutput } from '@crab-science/shared';
 import type { Tool } from './types.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Bash 工具
@@ -95,14 +98,39 @@ export class BashTool implements Tool {
     timeout: number,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const isWindows = process.platform === 'win32';
-    // Windows: 切换控制台到 UTF-8，设置 Python UTF-8 模式
-    const finalCommand = isWindows ? `chcp 65001 >nul 2>&1 && ${command}` : command;
     const env = {
       ...process.env,
       PYTHONIOENCODING: 'utf-8',
       PYTHONUTF8: '1',
     };
 
+    if (isWindows) {
+      const bashPath = this.findWindowsBash();
+      if (bashPath) {
+        const { stdout, stderr } = await execFileAsync(
+          bashPath,
+          ['-lc', command],
+          {
+            cwd,
+            timeout,
+            maxBuffer: 1024 * 1024 * 10, // 10MB
+            env,
+            encoding: 'utf-8',
+            windowsHide: true,
+          },
+        );
+
+        return {
+          stdout: stdout.toString(),
+          stderr: stderr.toString(),
+          exitCode: 0,
+        };
+      }
+    }
+
+    // Windows fallback: 切换控制台到 UTF-8，设置 Python UTF-8 模式。
+    // 如果安装了 Git Bash，上面的分支会优先使用 bash 语义。
+    const finalCommand = isWindows ? `chcp 65001 >nul 2>&1 && ${command}` : command;
     const { stdout, stderr } = await execAsync(finalCommand, {
       cwd,
       timeout,
@@ -116,5 +144,43 @@ export class BashTool implements Tool {
       stderr: stderr.toString(),
       exitCode: 0,
     };
+  }
+
+  /**
+   * Windows 自带的 WSL bash.exe 不一定可用，也不能稳定处理 Windows cwd。
+   * BashTool 需要的是 Git Bash 这类能直接在 Windows 路径中执行 POSIX 命令的 shell。
+   */
+  private findWindowsBash(): string | null {
+    const candidates = [
+      process.env.GIT_BASH_PATH,
+      process.env.GIT_INSTALL_ROOT
+        ? path.join(process.env.GIT_INSTALL_ROOT, 'bin', 'bash.exe')
+        : undefined,
+      process.env.ProgramFiles
+        ? path.join(process.env.ProgramFiles, 'Git', 'bin', 'bash.exe')
+        : undefined,
+      process.env['ProgramFiles(x86)']
+        ? path.join(process.env['ProgramFiles(x86)'], 'Git', 'bin', 'bash.exe')
+        : undefined,
+      process.env.LOCALAPPDATA
+        ? path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'bin', 'bash.exe')
+        : undefined,
+    ];
+
+    const pathEntries = (process.env.PATH ?? '').split(path.delimiter);
+    for (const entry of pathEntries) {
+      if (!entry.toLowerCase().includes(`${path.sep}git${path.sep}`)) {
+        continue;
+      }
+      candidates.push(path.join(entry, 'bash.exe'));
+    }
+
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
   }
 }

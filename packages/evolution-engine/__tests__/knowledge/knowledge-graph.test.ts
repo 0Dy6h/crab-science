@@ -45,7 +45,7 @@ describe.skipIf(!sqliteAvailable)('KnowledgeGraph', () => {
 
   function insertExperience(
     overrides: Partial<Omit<Experience, 'id'>> = {},
-  ): string {
+  ): Experience {
     return expRepo.insert({
       timestamp: new Date().toISOString(),
       taskId: 'task-1',
@@ -64,10 +64,10 @@ describe.skipIf(!sqliteAvailable)('KnowledgeGraph', () => {
 
   describe('buildEdgesForExperience', () => {
     it('应为新经验创建 same_tag 边', () => {
-      const exp1Id = insertExperience({ tags: ['python', 'ml'] });
-      const exp2Id = insertExperience({ tags: ['python', 'nlp'] });
+      const exp1 = insertExperience({ tags: ['python', 'ml'] });
+      const exp2 = insertExperience({ tags: ['python', 'nlp'] });
 
-      graph.buildEdgesForExperience(exp2Id);
+      graph.buildEdgesForExperience(exp2);
 
       const edges = knowledgeRepo.getAllEdges();
       const tagEdges = edges.filter((e) => e.type === 'same_tag');
@@ -76,17 +76,17 @@ describe.skipIf(!sqliteAvailable)('KnowledgeGraph', () => {
       // 应有 exp2 → exp1 的边（共享 python 标签）
       const hasEdge = tagEdges.some(
         (e) =>
-          (e.sourceId === exp2Id && e.targetId === exp1Id) ||
-          (e.sourceId === exp1Id && e.targetId === exp2Id),
+          (e.sourceId === exp2.id && e.targetId === exp1.id) ||
+          (e.sourceId === exp1.id && e.targetId === exp2.id),
       );
       expect(hasEdge).toBe(true);
     });
 
     it('应创建 same_skill 边', () => {
-      const exp1Id = insertExperience({ skillUsed: 'shared-skill' });
-      const exp2Id = insertExperience({ skillUsed: 'shared-skill' });
+      insertExperience({ skillUsed: 'shared-skill' });
+      const exp2 = insertExperience({ skillUsed: 'shared-skill' });
 
-      graph.buildEdgesForExperience(exp2Id);
+      graph.buildEdgesForExperience(exp2);
 
       const edges = knowledgeRepo.getAllEdges();
       const skillEdges = edges.filter((e) => e.type === 'same_skill');
@@ -94,12 +94,12 @@ describe.skipIf(!sqliteAvailable)('KnowledgeGraph', () => {
     });
 
     it('无相似经验时不应创建边', () => {
-      const exp1Id = insertExperience({ tags: ['unique-tag'], skillUsed: 'unique-skill' });
-      const exp2Id = insertExperience({ tags: ['different-tag'], skillUsed: 'different-skill' });
+      insertExperience({ tags: ['unique-tag'], skillUsed: 'unique-skill' });
+      const exp2 = insertExperience({ tags: ['different-tag'], skillUsed: 'different-skill' });
 
-      graph.buildEdgesForExperience(exp2Id);
+      graph.buildEdgesForExperience(exp2);
 
-      const edges = knowledgeRepo.findEdges(exp2Id);
+      const edges = knowledgeRepo.findEdges(exp2.id);
       expect(edges).toHaveLength(0);
     });
   });

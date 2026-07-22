@@ -37,7 +37,7 @@
 3. Node.js 20 LTS 原生支持 `node:sqlite`，但该模块仍为实验性 API（`--experimental-sqlite` flag），生产环境不适合
 4. `better-sqlite3` 成熟稳定，npm 周下载量 2M+，社区生态完善
 5. 支持 prepared statements、事务、WAL 模式，满足进化引擎的查询需求
-6. 安装时需要 node-gyp 编译，但项目已要求 Node.js >= 20，且 pnpm 会自动处理 native 模块
+6. 安装时需要匹配 Node ABI 的原生绑定。项目运行时正式锁定为 Node.js 20.x（仓库声明 20.20.2，`engines.node` 为 `>=20.0.0 <21.0.0`，并启用 `engine-strict`），避免 Node 24 在 Windows 上缺少 `better-sqlite3` 预编译产物后退回源码编译。
 
 ### ADR-P3-002: Git 实现选择
 
@@ -236,7 +236,7 @@ Phase 3 在 Phase 1/2 技术栈基础上引入两个新核心依赖：
 | 维度 | 选型 | 变更说明 |
 |------|------|---------|
 | 语言 | TypeScript 5.x | 不变 |
-| 运行时 | Node.js 20 LTS | 不变 |
+| 运行时 | Node.js 20.x LTS（仓库声明 20.20.2） | 不变；禁止 Node 24 跑 SQLite 原生依赖 |
 | Monorepo | Turborepo + pnpm | 不变 |
 | CLI 框架 | Ink 4.x | 不变 |
 | LLM SDK | openai + @anthropic-ai/sdk | 不变 |
@@ -2319,7 +2319,7 @@ graph TD
 
 ### 8.2 依赖变更说明
 
-- **better-sqlite3**：用于 Storage 包的 SQLite 数据库操作。同步 API 简化代码，C++ 原生绑定保证性能。安装时需要 node-gyp 编译，Node.js 20 LTS 已包含所需工具链。
+- **better-sqlite3**：用于 Storage 包的 SQLite 数据库操作。同步 API 简化代码，C++ 原生绑定保证性能。必须在 Node.js 20.x 下安装/运行；仓库通过 `.nvmrc`、`.node-version`、`engines.node` 与 `engine-strict` 阻止 Node 24 进入 SQLite 原生依赖路径。
 - **isomorphic-git**：用于 GitManager 的版本控制操作。纯 JavaScript 实现，无需系统安装 git，跨平台兼容。
 - Phase 1/2 的所有依赖保持不变。
 - `gray-matter` 在 evolution-engine 中复用（解析 Subagent 定义文件的 frontmatter）。
@@ -2440,7 +2440,7 @@ graph TD
 
 | # | 问题 | 当前假设 | 需要确认 |
 |---|------|---------|---------|
-| 1 | better-sqlite3 在 Windows 上的编译兼容性？ | 假设 Node.js 20 LTS + pnpm 可正常安装。pnpm 会自动处理 native 模块编译 | 需在 Windows 环境验证 `pnpm install` |
+| 1 | better-sqlite3 在 Windows 上的编译兼容性？ | 已将项目锁定到 Node.js 20.x，并在 Windows + Node 20.20.2 下验证 SQLite 相关测试通过；Node 24 会被 `engine-strict` 拦截 | 新机器/CI 需用 Node 20 复验 `pnpm install && pnpm test` |
 | 2 | isomorphic-git 在大文件（SKILL.md 频繁修改）上的性能？ | 假设 Skill 文件小（< 10KB），git 操作 < 100ms | 性能问题在出现后再优化 |
 | 3 | 进化引擎的 evolutionProvider 如何选择？如果用户只配置了 Anthropic 但 evolutionModel 设为 deepseek-chat？ | 假设 evolutionModel 对应的 Provider 必须已注册（有 API Key）。如果未注册，回退到主 Provider | 实现时验证回退逻辑 |
 | 4 | Subagent 委派时如何传递工具上下文？Subagent 的 tools 列表是 frontmatter 中声明的，但 ToolRegistry 是全局的 | 假设 Subagent 委派时创建一个子 ToolRegistry，只包含 frontmatter 中声明的工具 | 需在 SubagentDelegator 中实现工具过滤 |

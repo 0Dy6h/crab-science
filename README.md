@@ -6,7 +6,17 @@ Crab-Science 是一个极简内核的科研 AI Agent 框架，支持双 LLM Prov
 
 ## 快速开始
 
+### 环境要求
+
+- Node.js 20.x LTS（推荐/已验证：20.20.2）
+- pnpm 9.7.0
+
+项目使用 `better-sqlite3` 作为 SQLite 原生依赖，Node 运行时必须保持在 20.x。仓库已通过 `.nvmrc`、`.node-version`、`package.json#engines.node` 和 `.npmrc#engine-strict` 固化策略；不要用 Node 24 安装或运行本项目。
+
 ```bash
+# 如果你使用 nvm / fnm / mise / asdf 等版本管理器，先切到仓库声明的 Node 版本
+nvm use
+
 # 安装依赖
 pnpm install
 

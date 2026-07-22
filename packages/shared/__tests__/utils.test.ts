@@ -44,12 +44,31 @@ describe('generateId', () => {
 describe('expandTilde', () => {
   it('应将 ~/ 展开为用户 home 目录', () => {
     const result = expandTilde('~/documents/file.txt');
-    expect(result).toBe(path.join(os.homedir(), 'documents/file.txt'));
+    const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    expect(result).toBe(path.join(homeDir, 'documents/file.txt'));
   });
 
   it('应将单独的 ~ 展开为 home 目录', () => {
     const result = expandTilde('~');
-    expect(result).toBe(os.homedir());
+    expect(result).toBe(process.env.HOME || process.env.USERPROFILE || os.homedir());
+  });
+
+  it('设置 HOME 时应优先展开到 HOME 目录', () => {
+    const originalHome = process.env.HOME;
+    const testHome = path.join(os.tmpdir(), 'crab-test-home');
+    process.env.HOME = testHome;
+
+    try {
+      expect(expandTilde('~/.crab-science/crab-science.db')).toBe(
+        path.join(testHome, '.crab-science', 'crab-science.db'),
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+    }
   });
 
   it('不应修改非 tilde 开头的路径', () => {

@@ -18,6 +18,7 @@ try {
 describe.skipIf(!sqliteAvailable)('SkillValidator', () => {
   let db: CrabDatabase;
   let repo: SkillMetricsRepository;
+  let gitManager: GitManager;
   let versioner: SkillVersioner;
   let validator: SkillValidator;
   let testDir: string;
@@ -30,7 +31,7 @@ describe.skipIf(!sqliteAvailable)('SkillValidator', () => {
     db = new CrabDatabase();
     db.initialize();
     repo = new SkillMetricsRepository(db);
-    const gitManager = new GitManager(testDir);
+    gitManager = new GitManager(testDir);
     versioner = new SkillVersioner(gitManager);
     validator = new SkillValidator(repo, versioner, {
       skillRollbackSuccessRateDrop: 0.15,
@@ -65,6 +66,26 @@ describe.skipIf(!sqliteAvailable)('SkillValidator', () => {
       sessionId: 's1',
       ...overrides,
     });
+  }
+
+  async function createVersionedSkill(skillName: string): Promise<void> {
+    const skillDir = path.join(testDir, '.crab-science', 'skills', skillName);
+    const skillPath = path.join(skillDir, 'SKILL.md');
+    fs.mkdirSync(skillDir, { recursive: true });
+
+    fs.writeFileSync(
+      skillPath,
+      `---\nname: ${skillName}\nversion: 1\n---\n# ${skillName}\n\nv1 content\n`,
+      'utf-8',
+    );
+    await gitManager.commit(skillPath, `feat(skill): ${skillName} v1`);
+
+    fs.writeFileSync(
+      skillPath,
+      `---\nname: ${skillName}\nversion: 2\n---\n# ${skillName}\n\nv2 content\n`,
+      'utf-8',
+    );
+    await gitManager.commit(skillPath, `feat(skill): ${skillName} v2`);
   }
 
   describe('markPendingValidation', () => {
@@ -109,6 +130,8 @@ describe.skipIf(!sqliteAvailable)('SkillValidator', () => {
     });
 
     it('新版本成功率显著下降时应触发回滚', async () => {
+      await createVersionedSkill('test-skill');
+
       // 旧版本：高成功率
       insertRecord({ skillVersion: 1, status: 'success' });
       insertRecord({ skillVersion: 1, status: 'success' });
@@ -124,7 +147,7 @@ describe.skipIf(!sqliteAvailable)('SkillValidator', () => {
 
       const result = await validator.validate('test-skill');
       expect(result.rolledBack).toBe(true);
-      expect(result.reason).toContain('success_rate');
+      expect(result.reason).toContain('成功率下降');
     });
 
     it('新版本成功率正常时不应回滚', async () => {

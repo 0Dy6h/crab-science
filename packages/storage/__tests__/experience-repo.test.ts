@@ -54,15 +54,15 @@ describe.skipIf(!isSqliteAvailable())('ExperienceRepository', () => {
 
   describe('insert', () => {
     it('应插入经验并返回 ID', () => {
-      const id = repo.insert(makeExperience());
-      expect(id).toMatch(/^exp_/);
+      const saved = repo.insert(makeExperience());
+      expect(saved.id).toMatch(/^exp_/);
     });
   });
 
   describe('findById', () => {
     it('应按 ID 查找经验', () => {
-      const id = repo.insert(makeExperience({ task: '特殊任务' }));
-      const found = repo.findById(id);
+      const saved = repo.insert(makeExperience({ task: '特殊任务' }));
+      const found = repo.findById(saved.id);
       expect(found).toBeDefined();
       expect(found!.task).toBe('特殊任务');
     });

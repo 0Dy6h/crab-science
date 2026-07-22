@@ -70,7 +70,7 @@ export class ExperienceRepository {
 
     const stmt = this.db.prepare(`
       SELECT * FROM experiences
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
     `);
 
@@ -90,7 +90,7 @@ export class ExperienceRepository {
     const stmt = this.db.prepare(`
       SELECT * FROM experiences
       WHERE skillUsed = ?
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
     `);
 
@@ -112,7 +112,7 @@ export class ExperienceRepository {
     const stmt = this.db.prepare(`
       SELECT * FROM experiences
       WHERE ${conditions}
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
     `);
 
@@ -136,7 +136,7 @@ export class ExperienceRepository {
   getRecent(limit: number): Experience[] {
     const stmt = this.db.prepare(`
       SELECT * FROM experiences
-      ORDER BY timestamp DESC
+      ORDER BY timestamp DESC, rowid DESC
       LIMIT ?
     `);
 

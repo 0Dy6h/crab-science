@@ -15,7 +15,10 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/**/__tests__/**/*.test.ts'],
+    include: [
+      'packages/**/__tests__/**/*.test.ts',
+      'apps/**/__tests__/**/*.test.ts',
+    ],
     globals: true,
   },
 });

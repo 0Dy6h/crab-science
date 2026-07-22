@@ -19,7 +19,8 @@ export function generateId(prefix: string): string {
  */
 export function expandTilde(filePath: string): string {
   if (filePath.startsWith('~/') || filePath === '~') {
-    return path.join(os.homedir(), filePath.slice(1));
+    const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
+    return path.join(homeDir, filePath.slice(1));
   }
   return filePath;
 }

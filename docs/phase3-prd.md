@@ -15,7 +15,7 @@
 |------|------|
 | **项目名称** | crab-science |
 | **Phase** | Phase 3 — 进化机制（核心创新） |
-| **技术栈** | Turborepo + pnpm monorepo, TypeScript, Node.js, Ink 4.x, SQLite (better-sqlite3), isomorphic-git |
+| **技术栈** | Turborepo + pnpm monorepo, TypeScript, Node.js 20.x LTS（仓库声明 20.20.2）, Ink 4.x, SQLite (better-sqlite3), isomorphic-git |
 | **语言** | 中文 |
 | **原始需求** | 实现三层进化体系（Skill 迭代 + Subagent 创建 + Knowledge 积累）+ Evolution Engine 调度 + SQLite 存储迁移，让 agent 越用越强 |
 
@@ -558,7 +558,7 @@ packages/
 
 | # | 问题 | 背景 | 建议方案 | 需要决策方 |
 |---|------|------|---------|-----------|
-| 1 | **SQLite 库选择：better-sqlite3 vs node:sqlite** | better-sqlite3 是成熟方案但需要原生编译；Node.js 22+ 内置了 `node:sqlite`（实验性）。Phase 3 用哪个？ | 倾向 better-sqlite3（成熟稳定、同步 API 简单、社区生态好）。node:sqlite 仍在实验阶段，等稳定后再迁移。 | 架构师 |
+| 1 | **SQLite 库选择：better-sqlite3 vs node:sqlite** | better-sqlite3 是成熟方案但需要原生绑定；Node.js 22+ 内置了 `node:sqlite`（实验性）。Phase 3 用哪个？ | 采用 better-sqlite3（成熟稳定、同步 API 简单、社区生态好），并将项目运行时锁定为 Node.js 20.x；Node 24 不作为支持运行时。node:sqlite 等稳定后再迁移。 | 架构师 |
 | 2 | **Git 实现：isomorphic-git vs 系统 git** | isomorphic-git 是纯 JS 实现，无需系统安装 git，但功能有限（不支持 merge 等）；系统 git 功能完整但增加外部依赖 | 倾向 isomorphic-git（Phase 3 只需要 commit/log/diff/checkout，不需要 merge/rebase）。纯 JS 实现避免外部依赖，符合极简哲学。 | 架构师 |
 | 3 | **进化分析的 LLM 模型选择** | 进化分析（优化建议、经验提取、subagent 草案）需要 LLM 调用，额外消耗成本。用哪个模型？是否可配置？ | config.json 增加 `evolutionModel` 字段，默认使用便宜模型（如 DeepSeek / GPT-4o-mini / Claude Haiku）。用户可自行配置。进化成本单独统计。 | 产品 + 架构师 |
 | 4 | **Skill 优化建议的采纳决策权** | 优化建议生成后，是 Agent 自主决定是否采纳，还是必须用户确认？设计文档说"Agent 审查建议决定是否采纳"，但安全章说"重大变更需要用户确认" | 分级处理：小优化（补充注意事项、调整描述）Agent 可自主采纳；重大变更（删除执行步骤、改变核心流程）必须用户确认。分级标准在 config.json 中可配置。 | 产品 |
@@ -637,6 +637,7 @@ packages/
 ### 技术验收
 
 - [ ] `pnpm build` 成功，无 TypeScript 类型错误
+- [ ] 开发、安装、测试和运行均使用 Node.js 20.x；Node 24 会被 engines/engine-strict 拦截，避免 SQLite 原生依赖误编译
 - [ ] 新增 `packages/evolution-engine/` 和 `packages/storage/` 两个包
 - [ ] SQLite 数据库能正确创建、读写、迁移
 - [ ] Phase 2 的 executions.jsonl 能自动迁移到 SQLite

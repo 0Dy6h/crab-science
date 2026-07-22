@@ -140,15 +140,75 @@ export class ExtensionLoader {
    * @internal
    */
   private async compileExtension(filePath: string): Promise<string> {
-    const result = await esbuild.build({
-      entryPoints: [filePath],
-      bundle: true,
+    try {
+      const result = await esbuild.build({
+        absWorkingDir: path.dirname(filePath),
+        entryPoints: [`./${path.basename(filePath)}`],
+        bundle: true,
+        format: 'cjs',
+        platform: 'node',
+        write: false,
+        external: [],
+        logLevel: 'silent',
+        tsconfigRaw: {
+          compilerOptions: {
+            target: 'ES2022',
+            module: 'CommonJS',
+            moduleResolution: 'Node',
+            esModuleInterop: true,
+            skipLibCheck: true,
+            strict: false,
+          },
+        },
+      });
+      return result.outputFiles[0].text;
+    } catch (err) {
+      if (!this.shouldFallbackToTransform(err)) {
+        throw err;
+      }
+      return this.transformExtension(filePath);
+    }
+  }
+
+  /**
+   * esbuild.build 会向入口文件父目录一路查找配置/包信息。
+   * 在受限 Windows 沙箱中，extension 位于用户临时目录时可能无法读取父目录。
+   * transform 只处理已读取的单文件源码，适合作为无本地 import 的 extension 兜底路径。
+   */
+  private async transformExtension(filePath: string): Promise<string> {
+    const source = fs.readFileSync(filePath, 'utf-8');
+    this.assertTransformFallbackCompatible(filePath, source);
+    const result = await esbuild.transform(source, {
+      loader: 'ts',
       format: 'cjs',
       platform: 'node',
-      write: false,
-      external: [],
+      target: 'es2022',
+      sourcefile: filePath,
+      logLevel: 'silent',
     });
-    return result.outputFiles[0].text;
+    return result.code;
+  }
+
+  private assertTransformFallbackCompatible(
+    filePath: string,
+    source: string,
+  ): void {
+    const importPattern =
+      /\bimport\s+(?:[^'"]+\s+from\s*)?['"][^'"]+['"]|\bexport\s+[^'"]*\s+from\s+['"][^'"]+['"]|\brequire\s*\(\s*['"][^'"]+['"]\s*\)/;
+
+    if (importPattern.test(source)) {
+      throw new Error(
+        `Fallback transform cannot load extension imports: ${filePath}`,
+      );
+    }
+  }
+
+  private shouldFallbackToTransform(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return (
+      message.includes('Access is denied') ||
+      message.includes('Cannot read directory')
+    );
   }
 
   /**

@@ -53,8 +53,8 @@ describe.skipIf(!isSqliteAvailable())('SkillMetricsRepository', () => {
 
   describe('insertExecution', () => {
     it('应插入执行记录并返回 ID', () => {
-      const id = repo.insertExecution(makeRecord());
-      expect(id).toMatch(/^exec_/);
+      const saved = repo.insertExecution(makeRecord());
+      expect(saved.id).toMatch(/^exec_/);
     });
 
     it('应插入多条执行记录', () => {
@@ -200,8 +200,8 @@ describe.skipIf(!isSqliteAvailable())('SkillMetricsRepository', () => {
 
   describe('updateExecution', () => {
     it('应更新执行记录的 rating', () => {
-      const id = repo.insertExecution(makeRecord({ rating: 0 }));
-      repo.updateExecution(id, { rating: 5 });
+      const saved = repo.insertExecution(makeRecord({ rating: 0 }));
+      repo.updateExecution(saved.id, { rating: 5 });
 
       const records = repo.queryExecutions('test-skill', { limit: 1 });
       expect(records[0].rating).toBe(5);

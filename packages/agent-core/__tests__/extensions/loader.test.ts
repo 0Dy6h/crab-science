@@ -67,6 +67,29 @@ function createBrokenExtension(dir: string, name: string): string {
   return filePath;
 }
 
+function createUnresolvedDependencyExtension(dir: string, name: string): string {
+  const filePath = path.join(dir, `${name}.ts`);
+  const code = `import missing from './missing-local-module';
+interface ToolResult { success: boolean; output: string; error?: string; }
+interface ToolContext { workDir: string; sessionId: string; }
+
+export const tool = {
+  name: '${name}',
+  description: 'Extension with missing runtime dependency',
+  parameters: {
+    type: 'object' as const,
+    properties: {},
+    required: []
+  },
+  execute: async (_params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> => {
+    return { success: true, output: String(missing) };
+  }
+};
+`;
+  fs.writeFileSync(filePath, code);
+  return filePath;
+}
+
 // 条件跳过：esbuild/chokidar 未安装时跳过所有测试
 describe.skipIf(!esbuildAvailable)('ExtensionLoader', () => {
   let extensionsDir: string;
@@ -138,6 +161,19 @@ describe.skipIf(!esbuildAvailable)('ExtensionLoader', () => {
       expect(loaded.length).toBe(1);
       expect(loaded[0].status).toBe('error');
       expect(loaded[0].error).toBeTruthy();
+    });
+
+    it('依赖无法解析的 extension 应保持 error 状态而不是降级为单文件加载', async () => {
+      createUnresolvedDependencyExtension(extensionsDir, 'missing-dep-ext');
+
+      const loaded = await loader.loadAll();
+
+      expect(loaded.length).toBe(1);
+      expect(loaded[0].status).toBe('error');
+      expect(loaded[0].error).toMatch(
+        /Could not resolve|Fallback transform cannot load extension imports/,
+      );
+      expect(registry.has('missing-dep-ext')).toBe(false);
     });
 
     it('空目录应返回空数组', async () => {

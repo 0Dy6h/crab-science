@@ -1,13 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import matter from 'gray-matter';
 import type {
   OptimizationSuggestion,
   ChangeEntry,
   GitLogEntry,
 } from '@crab-science/shared';
-import { nowISO } from '@crab-science/shared';
+import { nowISO, expandTilde } from '@crab-science/shared';
 import type { GitManager } from '@crab-science/storage';
 
 /**
@@ -167,7 +166,7 @@ export class SkillVersioner {
   private findSkillPath(skillName: string): string | null {
     const possiblePaths = [
       path.join(process.cwd(), 'skills', skillName, 'SKILL.md'),
-      path.join(os.homedir(), '.crab-science', 'skills', skillName, 'SKILL.md'),
+      expandTilde(`~/.crab-science/skills/${skillName}/SKILL.md`),
     ];
 
     for (const p of possiblePaths) {
@@ -221,11 +220,7 @@ export class SkillVersioner {
    * 追加 CHANGELOG 条目
    */
   private appendChangelog(entry: ChangeEntry): void {
-    const changelogPath = path.join(
-      os.homedir(),
-      '.crab-science',
-      'CHANGELOG.md',
-    );
+    const changelogPath = expandTilde('~/.crab-science/CHANGELOG.md');
 
     const dir = path.dirname(changelogPath);
     if (!fs.existsSync(dir)) {
