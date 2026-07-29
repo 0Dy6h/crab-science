@@ -9,6 +9,7 @@ import type {
   PatternMatch,
   AppConfig,
   GitLogEntry,
+  OptimizationSuggestion,
 } from '@crab-science/shared';
 import { nowISO } from '@crab-science/shared';
 import type { LLMProvider } from '@crab-science/llm-layer';
@@ -21,6 +22,7 @@ import {
   ExperienceRepository,
   SkillMetricsRepository,
   KnowledgeRepository as KnowledgeRepoClass,
+  ChangelogRepository,
 } from '@crab-science/storage';
 import { SkillMetricsEvaluator } from './skill/metrics-evaluator.js';
 import { SkillOptimizer } from './skill/skill-optimizer.js';
@@ -57,6 +59,7 @@ export class EvolutionEngine {
   private experienceRepo: ExperienceRepository;
   private skillMetricsRepo: SkillMetricsRepository;
   private knowledgeRepo: KnowledgeRepository;
+  private changelogRepo: ChangelogRepository;
 
   // Skill 进化模块
   private metricsEvaluator: SkillMetricsEvaluator;
@@ -84,8 +87,10 @@ export class EvolutionEngine {
   // 状态
   private taskCounter = 0;
   private eventCallbacks: EvolutionEventCallback[] = [];
-  private changelog: ChangeEntry[] = [];
   private isEvaluating = false;
+
+  // HITL: 待用户确认的 major 优化建议队列
+  private pendingSuggestions = new Map<string, OptimizationSuggestion>();
 
   constructor(options: {
     database: CrabDatabase;
@@ -108,6 +113,7 @@ export class EvolutionEngine {
     this.experienceRepo = new ExperienceRepository(this.database);
     this.skillMetricsRepo = new SkillMetricsRepository(this.database);
     this.knowledgeRepo = new KnowledgeRepoClass(this.database);
+    this.changelogRepo = new ChangelogRepository(this.database);
 
     // 初始化 Skill 进化模块
     this.metricsEvaluator = new SkillMetricsEvaluator(
@@ -415,7 +421,10 @@ export class EvolutionEngine {
             );
           }
         }
-        // major 优化需要用户确认，仅记录建议
+        // major 优化需要用户确认，存入待确认队列
+        if (suggestion.severity === 'major') {
+          this.pendingSuggestions.set(suggestion.id, suggestion);
+        }
       }
     } catch (err) {
       console.error('[EvolutionEngine] Skill 评估失败:', err);
@@ -580,6 +589,74 @@ export class EvolutionEngine {
     return result;
   }
 
+  // ============================================================
+  // HITL: 用户确认循环（Slice 3）
+  // ============================================================
+
+  /**
+   * 获取待用户确认的 major 优化建议列表
+   */
+  getPendingOptimizations(): OptimizationSuggestion[] {
+    return Array.from(this.pendingSuggestions.values());
+  }
+
+  /**
+   * 预览优化建议的变更内容（不实际应用）
+   * @param suggestionId - 建议 ID
+   * @returns 预览文本，找不到建议返回 null
+   */
+  previewOptimization(suggestionId: string): string | null {
+    const suggestion = this.pendingSuggestions.get(suggestionId);
+    if (!suggestion) return null;
+
+    const newVersion = suggestion.currentVersion + 1;
+    const lines = [
+      `Skill: ${suggestion.skillName}`,
+      `当前版本: v${suggestion.currentVersion} → v${newVersion}`,
+      `严重级别: ${suggestion.severity}`,
+      `目标段落: ${suggestion.section}`,
+      '',
+      `修改建议:`,
+      `  ${suggestion.suggestion}`,
+      '',
+      `修改理由:`,
+      `  ${suggestion.rationale}`,
+      '',
+      `预览变更（将追加到 "${suggestion.section}" 段落）:`,
+      `  > [自动优化 v${newVersion}] ${suggestion.suggestion}`,
+      '',
+      `输入 /approve ${suggestionId} 确认应用，或 /reject ${suggestionId} 拒绝`,
+    ];
+    return lines.join('\n');
+  }
+
+  /**
+   * 用户确认后应用优化建议
+   * @param suggestionId - 建议 ID
+   * @returns 应用结果，找不到建议返回 null
+   */
+  async approveOptimization(
+    suggestionId: string,
+  ): Promise<{ newVersion: number; commitHash: string } | null> {
+    const suggestion = this.pendingSuggestions.get(suggestionId);
+    if (!suggestion) return null;
+
+    // 从待确认队列移除
+    this.pendingSuggestions.delete(suggestionId);
+
+    // 应用优化（复用已有的 applyOptimization 方法）
+    return this.applyOptimization(suggestion);
+  }
+
+  /**
+   * 用户拒绝优化建议
+   * @param suggestionId - 建议 ID
+   * @returns 是否成功拒绝
+   */
+  rejectOptimization(suggestionId: string): boolean {
+    return this.pendingSuggestions.delete(suggestionId);
+  }
+
   /**
    * 手动回滚 Skill 版本
    * @param skillName - Skill 名称
@@ -671,10 +748,10 @@ export class EvolutionEngine {
   }
 
   /**
-   * 获取变更日志
+   * 获取变更日志（从 SQLite 持久化存储读取）
    */
   getChangelog(): ChangeEntry[] {
-    return [...this.changelog];
+    return this.changelogRepo.getAll();
   }
 
   /**
@@ -692,14 +769,10 @@ export class EvolutionEngine {
   }
 
   /**
-   * 记录变更日志
+   * 记录变更日志（持久化到 SQLite）
    */
   private recordChangelog(entry: ChangeEntry): void {
-    this.changelog.unshift(entry);
-    // 最多保留 200 条
-    if (this.changelog.length > 200) {
-      this.changelog = this.changelog.slice(0, 200);
-    }
+    this.changelogRepo.record(entry);
   }
 
   /**

@@ -142,6 +142,16 @@ export class CommandHandler {
       case 'rate':
         return this.handleRate(args[0], args[1]);
 
+      // Slice 3: HITL 确认循环
+      case 'pending':
+        return this.handlePending();
+
+      case 'approve':
+        return this.handleApprove(args[0]);
+
+      case 'reject':
+        return this.handleReject(args[0]);
+
       case 'exit':
       case 'quit':
         return { handled: true, exit: true };
@@ -779,6 +789,89 @@ export class CommandHandler {
     return { handled: true, output: `已为 Skill "${skillName}" 提交评分: ${rating}/5` };
   }
 
+  // ============================================================
+  // Slice 3: HITL 确认循环
+  // ============================================================
+
+  /** /pending — 列出待确认的 major 优化建议 */
+  private handlePending(): CommandResult {
+    const pending = this.agent.getPendingOptimizations();
+
+    if (pending.length === 0) {
+      return { handled: true, output: '当前无待确认的优化建议。' };
+    }
+
+    const lines = pending.map((s, i) => {
+      return ` [${i}] ${s.id} | ${s.skillName} v${s.currentVersion}→v${s.currentVersion + 1} | ${s.severity}
+  段落: ${s.section}
+  建议: ${s.suggestion}
+  理由: ${s.rationale}`;
+    });
+
+    return {
+      handled: true,
+      output: `待确认优化建议 (${pending.length} 条):\n${lines.join('\n')}\n\n使用 /approve <id> 确认，/reject <id> 拒绝`,
+    };
+  }
+
+  /** /approve <id> — 确认并应用优化建议 */
+  private handleApprove(suggestionId?: string): CommandResult {
+    if (!suggestionId) {
+      const pending = this.agent.getPendingOptimizations();
+      if (pending.length === 0) {
+        return { handled: true, output: '当前无待确认的优化建议。' };
+      }
+      const lines = pending.map((s, i) => ` [${i}] ${s.id} | ${s.skillName} | ${s.severity}`);
+      return {
+        handled: true,
+        output: `用法: /approve <suggestion-id>\n待确认建议:\n${lines.join('\n')}`,
+      };
+    }
+
+    // 先预览
+    const preview = this.agent.previewOptimization(suggestionId);
+    if (!preview) {
+      return { handled: true, output: `建议 "${suggestionId}" 不存在或已处理。` };
+    }
+
+    // 异步应用
+    this.agent.approveOptimization(suggestionId).then((result) => {
+      if (result) {
+        console.log(`\n✓ 优化已应用: v${result.newVersion} (commit: ${result.commitHash.substring(0, 8)})`);
+      } else {
+        console.log('\n✗ 优化应用失败。');
+      }
+    }).catch((err) => {
+      console.log('\n✗ 优化应用失败:', err);
+    });
+
+    return {
+      handled: true,
+      output: `正在应用优化建议 ${suggestionId}...\n\n${preview}`,
+    };
+  }
+
+  /** /reject <id> — 拒绝优化建议 */
+  private handleReject(suggestionId?: string): CommandResult {
+    if (!suggestionId) {
+      const pending = this.agent.getPendingOptimizations();
+      if (pending.length === 0) {
+        return { handled: true, output: '当前无待确认的优化建议。' };
+      }
+      const lines = pending.map((s, i) => ` [${i}] ${s.id} | ${s.skillName} | ${s.severity}`);
+      return {
+        handled: true,
+        output: `用法: /reject <suggestion-id>\n待确认建议:\n${lines.join('\n')}`,
+      };
+    }
+
+    const success = this.agent.rejectOptimization(suggestionId);
+    if (success) {
+      return { handled: true, output: `已拒绝优化建议 ${suggestionId}。` };
+    }
+    return { handled: true, output: `建议 "${suggestionId}" 不存在或已处理。` };
+  }
+
   /** /help */
   private handleHelp(): CommandResult {
     return {
@@ -814,6 +907,9 @@ export class CommandHandler {
         '  /versions <skill>  查看 Skill 版本历史（基于进化变更日志）',
         '  /changelog         查看完整进化变更日志',
         '  /rate <skill> <1-5>  为 Skill 评分',
+        '  /pending           查看待确认的 major 优化建议',
+        '  /approve <id>      确认并应用优化建议',
+        '  /reject <id>       拒绝优化建议',
         '',
         '  其他:',
         '  /config            查看当前配置',

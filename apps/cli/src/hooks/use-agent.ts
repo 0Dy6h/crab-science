@@ -15,6 +15,7 @@ import type {
   ChangeEntry,
   SubagentFrontmatter,
   GitLogEntry,
+  OptimizationSuggestion,
 } from '@crab-science/shared';
 import {
   Agent,
@@ -93,6 +94,11 @@ export interface UseAgentReturn {
   getSkillVersionHistory: (skillName: string) => Promise<GitLogEntry[]>;
   getSubagentMetrics: (name: string) => SubagentMetrics | null;
   submitRating: (skillName: string, rating: number) => void;
+  // Slice 3: HITL 确认循环
+  getPendingOptimizations: () => OptimizationSuggestion[];
+  previewOptimization: (suggestionId: string) => string | null;
+  approveOptimization: (suggestionId: string) => Promise<{ newVersion: number; commitHash: string } | null>;
+  rejectOptimization: (suggestionId: string) => boolean;
 }
 
 /**
@@ -389,6 +395,15 @@ export function useAgent(workDir: string): UseAgentReturn {
               const updated = [event, ...prev];
               return updated.slice(0, 20);
             });
+
+            if (event.type === 'optimization_proposed') {
+              const s = event.suggestion;
+              console.log(
+                `\n⚡ 新的优化建议待确认: ${s.skillName} v${s.currentVersion}→v${s.currentVersion + 1} [${s.severity}]\n` +
+                `   ${s.suggestion}\n` +
+                `   输入 /pending 查看详情，/approve ${s.id} 确认，/reject ${s.id} 拒绝\n`,
+              );
+            }
 
             if (event.type === 'subagent_created') {
               if (subagentRegistryRef.current) {
@@ -790,6 +805,42 @@ export function useAgent(workDir: string): UseAgentReturn {
     evolutionEngineRef.current.submitRating(skillName, rating);
   }, []);
 
+  // ============================================================
+  // Slice 3: HITL 确认循环
+  // ============================================================
+
+  /** 获取待确认的 major 优化建议 */
+  const getPendingOptimizations = useCallback((): OptimizationSuggestion[] => {
+    if (!evolutionEngineRef.current) return [];
+    return evolutionEngineRef.current.getPendingOptimizations();
+  }, []);
+
+  /** 预览优化建议变更 */
+  const previewOptimization = useCallback((suggestionId: string): string | null => {
+    if (!evolutionEngineRef.current) return null;
+    return evolutionEngineRef.current.previewOptimization(suggestionId);
+  }, []);
+
+  /** 确认并应用优化建议 */
+  const approveOptimization = useCallback(
+    async (suggestionId: string): Promise<{ newVersion: number; commitHash: string } | null> => {
+      if (!evolutionEngineRef.current) return null;
+      try {
+        return await evolutionEngineRef.current.approveOptimization(suggestionId);
+      } catch (err) {
+        console.error('[useAgent] 应用优化失败:', err);
+        return null;
+      }
+    },
+    [],
+  );
+
+  /** 拒绝优化建议 */
+  const rejectOptimization = useCallback((suggestionId: string): boolean => {
+    if (!evolutionEngineRef.current) return false;
+    return evolutionEngineRef.current.rejectOptimization(suggestionId);
+  }, []);
+
   return {
     messages,
     isProcessing,
@@ -829,5 +880,10 @@ export function useAgent(workDir: string): UseAgentReturn {
     getSkillVersionHistory,
     getSubagentMetrics,
     submitRating,
+    // Slice 3: HITL
+    getPendingOptimizations,
+    previewOptimization,
+    approveOptimization,
+    rejectOptimization,
   };
 }
