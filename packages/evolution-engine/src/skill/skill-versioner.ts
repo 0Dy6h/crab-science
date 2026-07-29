@@ -86,7 +86,7 @@ export class SkillVersioner {
       commitHash,
       timestamp: nowISO(),
     };
-    this.appendChangelog(changeEntry);
+    this.appendChangelog(changeEntry, skillPath);
 
     return { newVersion, commitHash };
   }
@@ -131,7 +131,7 @@ export class SkillVersioner {
       commitHash,
       timestamp: nowISO(),
     };
-    this.appendChangelog(changeEntry);
+    this.appendChangelog(changeEntry, skillPath);
 
     return commitHash;
   }
@@ -233,28 +233,38 @@ export class SkillVersioner {
   }
 
   /**
-   * 追加 CHANGELOG 条目
+   * 追加 CHANGELOG 条目到 skill 目录下的 CHANGELOG.md（P1-1）
+   *
+   * 每个 skill 目录维护独立的 CHANGELOG.md，记录该 skill 的所有版本变更。
+   * 格式遵循 Keep a Changelog 规范，按时间倒序排列。
+   *
+   * @param entry - 变更条目
+   * @param skillPath - SKILL.md 文件路径，CHANGELOG.md 写入同目录
    */
-  private appendChangelog(entry: ChangeEntry): void {
-    const changelogPath = expandTilde('~/.crab-science/CHANGELOG.md');
+  private appendChangelog(entry: ChangeEntry, skillPath: string): void {
+    const skillDir = path.dirname(skillPath);
+    const changelogPath = path.join(skillDir, 'CHANGELOG.md');
 
-    const dir = path.dirname(changelogPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(skillDir)) {
+      fs.mkdirSync(skillDir, { recursive: true });
     }
 
-    const line = `- [${entry.type}] ${entry.target} v${entry.version}: ${entry.description}${entry.commitHash ? ` (${entry.commitHash.substring(0, 8)})` : ''} — ${entry.timestamp}\n`;
+    // 构建格式化条目（Keep a Changelog 风格）
+    const dateStr = entry.timestamp.split('T')[0];
+    const typeLabel = entry.type === 'skill_optimize' ? '优化' :
+                      entry.type === 'skill_rollback' ? '回滚' : entry.type;
+    const line = `- **v${entry.version}** (${dateStr}) [${typeLabel}] ${entry.description}${entry.commitHash ? ` \`${entry.commitHash.substring(0, 8)}\`` : ''}\n`;
 
     let existingContent = '';
     if (fs.existsSync(changelogPath)) {
       existingContent = fs.readFileSync(changelogPath, 'utf-8');
     }
 
-    // 按时间倒序：新条目在前面
+    // 按时间倒序：新条目在 header 之后
     const header = existingContent.startsWith('# ')
       ? ''
-      : '# CHANGELOG\n\n';
-    const newContent = header + line + existingContent.replace(/^# CHANGELOG\n*/, '');
+      : `# CHANGELOG — ${entry.target}\n\n`;
+    const newContent = header + line + existingContent.replace(/^# CHANGELOG[^\n]*\n*/, '');
 
     fs.writeFileSync(changelogPath, newContent, 'utf-8');
   }
