@@ -9,7 +9,7 @@ export { SkillMetricsRepository } from './repositories/skill-metrics-repo.js';
 export { KnowledgeRepository } from './repositories/knowledge-repo.js';
 
 // Git Manager
-export { GitManager } from './git-manager.js';
+export { GitManager, PathOutsideRepoError } from './git-manager.js';
 
 // Migrations (for testing)
 export { runMigrations, getMigrationIds } from './migrations/runner.js';

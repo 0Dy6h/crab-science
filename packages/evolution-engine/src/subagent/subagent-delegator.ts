@@ -1,5 +1,4 @@
-import type { Session, SubagentDefinition, Message } from '@crab-science/shared';
-import { nowISO } from '@crab-science/shared';
+import type { Session, SubagentDefinition, Message, ToolDefinition } from '@crab-science/shared';
 import type { LLMProvider, LLMOptions } from '@crab-science/llm-layer';
 import type { ProviderRegistry } from '@crab-science/llm-layer';
 import type {
@@ -26,6 +25,7 @@ export class SubagentDelegator {
   private toolRegistry: IToolRegistry;
   private skillLoader: ISkillLoader;
   private contextBuilder: IContextBuilder;
+  private workDir: string;
 
   constructor(
     sessionManager: ISessionManager,
@@ -33,12 +33,14 @@ export class SubagentDelegator {
     toolRegistry: IToolRegistry,
     skillLoader: ISkillLoader,
     contextBuilder: IContextBuilder,
+    workDir?: string,
   ) {
     this.sessionManager = sessionManager;
     this.providerRegistry = providerRegistry;
     this.toolRegistry = toolRegistry;
     this.skillLoader = skillLoader;
     this.contextBuilder = contextBuilder;
+    this.workDir = workDir ?? process.cwd();
   }
 
   /**
@@ -61,17 +63,16 @@ export class SubagentDelegator {
   ): Promise<{ summary: string; success: boolean; branchLeafId: string }> {
     // 记录 fork 前的当前节点
     const originalCurrentNodeId = session.currentNodeId;
+    let provider: LLMProvider | undefined;
+    let branchLeafId = originalCurrentNodeId;
 
     // 1. Fork session
-    const forkNodeId = this.sessionManager.fork(session, {
+    this.sessionManager.fork(session, {
       reason: `subagent: ${subagent.meta.name}`,
     });
 
     try {
-      // 2. 获取 subagent 的 Provider
-      const provider = this.getSubagentProvider(session, subagent);
-
-      // 3. 构建 subagent context
+      // 2. 构建 subagent context（保持主路径，不把委派任务重复注入历史）
       const skills = this.skillLoader.discover();
 
       // 过滤工具：只保留 subagent 声明的工具
@@ -88,33 +89,48 @@ export class SubagentDelegator {
           defaultModel: session.model,
           maxIterations: 20,
           bashTimeoutMs: 30000,
-          workDir: process.cwd(),
+          workDir: this.workDir,
         },
         subagentTools,
       );
 
-      // 4. 构建 subagent 专用的系统提示
+      // 3. 在 fork 出的子分支上记录委派任务
+      branchLeafId = this.sessionManager.addNode(session, {
+        type: 'user',
+        content: task,
+        metadata: {},
+      });
+
+      // 4. 获取 subagent 的 Provider
+      provider = this.getSubagentProvider(session, subagent);
+
+      // 5. 构建 subagent 专用的系统提示
       const subagentSystemPrompt = this.buildSubagentSystemPrompt(
         subagent,
         systemPrompt,
       );
 
-      // 5. 执行 Agent Loop（在子分支中）
+      // 6. 执行 Agent Loop（仅暴露 subagent 声明的工具）
       const result = await this.executeSubagentLoop(
         provider,
         messages,
         subagentSystemPrompt,
         task,
         session.model,
+        subagentTools,
       );
 
-      // 6. 记录分支叶节点
-      const branchLeafId = session.currentNodeId;
+      // 7. 将 subagent 结果写入子分支叶节点
+      branchLeafId = this.sessionManager.addNode(session, {
+        type: 'assistant',
+        content: result,
+        metadata: {},
+      });
 
-      // 7. 回到原始节点
+      // 8. 回到原始节点
       session.currentNodeId = originalCurrentNodeId;
 
-      // 8. Summarize 子分支
+      // 9. Summarize 子分支
       const summaryNodeId = await this.sessionManager.summarize(
         session,
         branchLeafId,
@@ -137,13 +153,22 @@ export class SubagentDelegator {
       };
     } catch (err) {
       // 执行失败
-      const branchLeafId = session.currentNodeId;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const failureSummary = `[Subagent ${subagent.meta.name} 执行失败: ${errorMsg}]`;
+
+      // 在子分支上记录失败摘要，保证主 agent 不吞掉透明分支。
+      try {
+        branchLeafId = this.sessionManager.addNode(session, {
+          type: 'assistant',
+          content: failureSummary,
+          metadata: { isError: true },
+        });
+      } catch {
+        branchLeafId = session.currentNodeId || originalCurrentNodeId;
+      }
 
       // 回到原始节点
       session.currentNodeId = originalCurrentNodeId;
-
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const failureSummary = `[Subagent ${subagent.meta.name} 执行失败: ${errorMsg}]`;
 
       // 生成失败摘要
       try {
@@ -151,6 +176,7 @@ export class SubagentDelegator {
           session,
           branchLeafId,
           originalCurrentNodeId,
+          provider,
         );
       } catch {
         // summarize 失败时忽略
@@ -229,7 +255,9 @@ export class SubagentDelegator {
 
   /**
    * 执行 Subagent Agent Loop
-   * 简化版：直接调用 LLM，不使用完整 Agent 循环
+   * 简化版：直接调用 LLM，串行执行工具，直到无工具调用或达到迭代上限。
+   *
+   * @param allowedTools - subagent 声明的工具白名单（仅这些工具会暴露并被允许执行）
    */
   private async executeSubagentLoop(
     provider: LLMProvider,
@@ -237,11 +265,13 @@ export class SubagentDelegator {
     systemPrompt: string,
     task: string,
     model: string,
+    allowedTools: ToolDefinition[],
   ): Promise<string> {
+    const allowedNames = new Set(allowedTools.map((t) => t.name));
     const options: LLMOptions = {
       model,
       systemPrompt,
-      tools: this.toolRegistry.getDefinitions(),
+      tools: allowedTools,
       temperature: 0.7,
       maxTokens: 4096,
     };
@@ -260,6 +290,7 @@ export class SubagentDelegator {
       iteration++;
 
       const textParts: string[] = [];
+      const toolNameMap = new Map<string, string>();
       const pendingToolCalls: Array<{
         id: string;
         name: string;
@@ -274,10 +305,14 @@ export class SubagentDelegator {
             case 'text_delta':
               textParts.push(event.content);
               break;
+            case 'tool_call_start':
+              // 工具名仅在 start 事件携带，必须在此保存，否则 end 事件拿不到名字
+              toolNameMap.set(event.toolCallId, event.toolName);
+              break;
             case 'tool_call_end':
               pendingToolCalls.push({
                 id: event.toolCallId,
-                name: '',
+                name: toolNameMap.get(event.toolCallId) ?? '',
                 input: event.input,
               });
               break;
@@ -285,7 +320,7 @@ export class SubagentDelegator {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return `执行出错: ${msg}`;
+        throw new Error(`执行出错: ${msg}`);
       }
 
       result = textParts.join('');
@@ -295,16 +330,39 @@ export class SubagentDelegator {
         return result;
       }
 
-      // 执行工具调用
+      // 先追加 assistant 轮次（含 tool_use），保证 provider 侧 tool_use / tool_result 配对
+      taskMessages.push({
+        role: 'assistant',
+        content: [
+          ...(result ? [{ type: 'text' as const, text: result }] : []),
+          ...pendingToolCalls.map((tc) => ({
+            type: 'tool_use' as const,
+            toolCallId: tc.id,
+            toolName: tc.name,
+            input: tc.input,
+          })),
+        ],
+      });
+
+      // 执行工具调用（强制白名单）
       for (const tc of pendingToolCalls) {
-        const toolResult = await this.toolRegistry.execute(tc.name, tc.input, {
-          workDir: process.cwd(),
-          sessionId: 'subagent',
-        });
+        let output: string;
+        if (!allowedNames.has(tc.name)) {
+          // 未授权工具：拒绝执行，把原因回给模型而不是静默失败
+          output = `[拒绝] 工具 "${tc.name || '(空)'}" 不在该 Subagent 的授权列表内`;
+        } else {
+          const toolResult = await this.toolRegistry.execute(tc.name, tc.input, {
+            workDir: this.workDir,
+            sessionId: 'subagent',
+          });
+          output = toolResult.success
+            ? toolResult.output
+            : toolResult.output || toolResult.error || '工具执行失败';
+        }
 
         taskMessages.push({
           role: 'tool',
-          content: toolResult.output,
+          content: output,
           toolCallId: tc.id,
         });
       }

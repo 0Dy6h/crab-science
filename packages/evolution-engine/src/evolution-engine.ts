@@ -8,6 +8,7 @@ import type {
   Experience,
   PatternMatch,
   AppConfig,
+  GitLogEntry,
 } from '@crab-science/shared';
 import { nowISO } from '@crab-science/shared';
 import type { LLMProvider } from '@crab-science/llm-layer';
@@ -77,6 +78,8 @@ export class EvolutionEngine {
   // 配置
   private config: EvolutionConfig;
   private evolutionProvider: LLMProvider;
+  private evolutionModel: string;
+  private workDir: string;
 
   // 状态
   private taskCounter = 0;
@@ -88,12 +91,16 @@ export class EvolutionEngine {
     database: CrabDatabase;
     gitManager: GitManager;
     evolutionProvider: LLMProvider;
+    evolutionModel: string;
     config: EvolutionConfig;
+    workDir?: string;
     subagentDelegator?: SubagentDelegator;
   }) {
     this.database = options.database;
     this.gitManager = options.gitManager;
     this.evolutionProvider = options.evolutionProvider;
+    this.evolutionModel = options.evolutionModel;
+    this.workDir = options.workDir ?? process.cwd();
     this.config = options.config;
     this.subagentDelegator = options.subagentDelegator ?? null;
 
@@ -110,8 +117,10 @@ export class EvolutionEngine {
     this.skillOptimizer = new SkillOptimizer(
       this.evolutionProvider,
       this.skillMetricsRepo,
+      this.evolutionModel,
+      this.workDir,
     );
-    this.skillVersioner = new SkillVersioner(this.gitManager);
+    this.skillVersioner = new SkillVersioner(this.gitManager, this.workDir);
     this.skillValidator = new SkillValidator(
       this.skillMetricsRepo,
       this.skillVersioner,
@@ -127,6 +136,7 @@ export class EvolutionEngine {
       this.evolutionProvider,
       this.experienceRepo,
       this.knowledgeGraph,
+      this.evolutionModel,
     );
     this.knowledgeRetriever = new KnowledgeRetriever(
       this.experienceRepo,
@@ -142,6 +152,7 @@ export class EvolutionEngine {
     this.subagentCreator = new SubagentCreator(
       this.evolutionProvider,
       this.gitManager,
+      this.evolutionModel,
     );
     this.subagentEvaluator = new SubagentEvaluator(this.database);
   }
@@ -206,6 +217,16 @@ export class EvolutionEngine {
   ): Promise<void> {
     // 1. 记录执行到 SQLite（如果有 skillUsed）
     if (taskInfo.skillUsed) {
+      // 读取该 Skill 当前版本，避免所有执行都记为 v1（否则验证窗口永不闭合、自动回滚永不触发）
+      let skillVersion = 1;
+      try {
+        skillVersion = this.skillMetricsRepo.getOrCreateSkillMetricRecord(
+          taskInfo.skillUsed,
+        ).currentVersion;
+      } catch (err) {
+        console.error('[EvolutionEngine] 读取 Skill 版本失败，回退到 v1:', err);
+      }
+
       const executionRecord: Omit<SkillExecutionRecord, 'id' | 'timestamp'> = {
         skillName: taskInfo.skillUsed,
         task: taskInfo.task,
@@ -220,7 +241,7 @@ export class EvolutionEngine {
         tokenUsage: undefined,
         adopted: taskInfo.outcome === 'success',
         rating: 0,
-        skillVersion: 1,
+        skillVersion,
         sessionId: taskInfo.sessionId,
       };
 
@@ -654,6 +675,13 @@ export class EvolutionEngine {
    */
   getChangelog(): ChangeEntry[] {
     return [...this.changelog];
+  }
+
+  /**
+   * 获取 Git-backed Skill 版本历史
+   */
+  async getSkillVersionHistory(skillName: string): Promise<GitLogEntry[]> {
+    return this.skillVersioner.getVersionHistory(skillName);
   }
 
   /**

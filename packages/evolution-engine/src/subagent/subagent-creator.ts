@@ -7,7 +7,7 @@ import type {
   SubagentDefinition,
   SubagentFrontmatter,
 } from '@crab-science/shared';
-import { nowISO } from '@crab-science/shared';
+import { nowISO, assertSafeArtifactName, sanitizeArtifactName, isPathWithin } from '@crab-science/shared';
 import type { LLMProvider, LLMOptions } from '@crab-science/llm-layer';
 import type { GitManager } from '@crab-science/storage';
 
@@ -20,10 +20,12 @@ import type { GitManager } from '@crab-science/storage';
 export class SubagentCreator {
   private provider: LLMProvider;
   private gitManager: GitManager;
+  private model: string;
 
-  constructor(provider: LLMProvider, gitManager: GitManager) {
+  constructor(provider: LLMProvider, gitManager: GitManager, model: string) {
     this.provider = provider;
     this.gitManager = gitManager;
+    this.model = model;
   }
 
   /**
@@ -40,7 +42,11 @@ export class SubagentCreator {
     const frontmatter = parsed.data as Partial<SubagentFrontmatter>;
 
     const meta: SubagentFrontmatter = {
-      name: frontmatter.name ?? pattern.suggestedName,
+      // LLM 生成的 name 会落地为文件路径，必须净化以防路径穿越
+      name: sanitizeArtifactName(
+        frontmatter.name ?? pattern.suggestedName,
+        sanitizeArtifactName(pattern.suggestedName, 'subagent'),
+      ),
       description: frontmatter.description ?? pattern.suggestedDescription,
       mode: frontmatter.mode ?? 'autonomous',
       model: frontmatter.model ?? 'inherit',
@@ -67,8 +73,15 @@ export class SubagentCreator {
       fs.mkdirSync(subagentsDir, { recursive: true });
     }
 
+    // 双重防线：名称白名单 + 落地路径 containment，杜绝写出 subagents 目录之外
+    assertSafeArtifactName(subagent.meta.name);
     const fileName = `${subagent.meta.name}.md`;
     const filePath = path.join(subagentsDir, fileName);
+    if (!isPathWithin(filePath, subagentsDir)) {
+      throw new Error(
+        `拒绝写入 subagents 目录之外的路径: ${filePath}`,
+      );
+    }
 
     // 序列化为 Markdown
     const markdown = matter.stringify(subagent.content, subagent.meta);
@@ -143,7 +156,7 @@ triggers: ["关键词1", "关键词2"]
 请直接返回 Markdown 内容，不要包含其他解释。`;
 
     const options: LLMOptions = {
-      model: '',
+      model: this.model,
       systemPrompt: '你是一个 Subagent 设计专家。请生成 Subagent 定义文件。',
       temperature: 0.5,
       maxTokens: 1024,

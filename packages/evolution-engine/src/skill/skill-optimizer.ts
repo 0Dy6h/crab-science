@@ -20,10 +20,19 @@ import type { SkillMetricsRepository } from '@crab-science/storage';
 export class SkillOptimizer {
   private provider: LLMProvider;
   private skillMetricsRepo: SkillMetricsRepository;
+  private model: string;
+  private workDir: string;
 
-  constructor(provider: LLMProvider, skillMetricsRepo: SkillMetricsRepository) {
+  constructor(
+    provider: LLMProvider,
+    skillMetricsRepo: SkillMetricsRepository,
+    model: string,
+    workDir?: string,
+  ) {
     this.provider = provider;
     this.skillMetricsRepo = skillMetricsRepo;
+    this.model = model;
+    this.workDir = workDir ?? process.cwd();
   }
 
   /**
@@ -137,7 +146,7 @@ export class SkillOptimizer {
    */
   private readSkillContent(skillName: string): string {
     const possiblePaths = [
-      path.join(process.cwd(), 'skills', skillName, 'SKILL.md'),
+      path.join(this.workDir, 'skills', skillName, 'SKILL.md'),
       path.join(
         os.homedir(),
         '.crab-science',
@@ -218,7 +227,7 @@ ${recentExecutions || '无'}
    */
   private async callLLM(prompt: string): Promise<string | null> {
     const options: LLMOptions = {
-      model: '', // 由 Provider 内部决定，或使用默认模型
+      model: this.model,
       systemPrompt:
         '你是一个 Skill 优化专家。请分析数据并返回 JSON 格式的优化建议。',
       temperature: 0.3,

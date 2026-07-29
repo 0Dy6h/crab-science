@@ -14,15 +14,18 @@ export class ExperienceExtractor {
   private provider: LLMProvider;
   private experienceRepo: ExperienceRepository;
   private knowledgeGraph: KnowledgeGraph;
+  private model: string;
 
   constructor(
     provider: LLMProvider,
     experienceRepo: ExperienceRepository,
     knowledgeGraph: KnowledgeGraph,
+    model: string,
   ) {
     this.provider = provider;
     this.experienceRepo = experienceRepo;
     this.knowledgeGraph = knowledgeGraph;
+    this.model = model;
   }
 
   /**
@@ -40,6 +43,11 @@ export class ExperienceExtractor {
       const analysis = await this.analyzeExecution(session, taskInfo);
 
       if (!analysis) return null;
+
+      // 空分析（LLM 返回非数组/无关 JSON）不落库，避免写入无意义的经验行
+      if (analysis.keyLearnings.length === 0 && analysis.tags.length === 0) {
+        return null;
+      }
 
       // 构建 Experience 对象
       const experience: Omit<Experience, 'id'> = {
@@ -126,7 +134,7 @@ ${executionText}
 - 从执行过程中提取有价值的经验教训`;
 
     const options: LLMOptions = {
-      model: '',
+      model: this.model,
       systemPrompt: '你是一个经验提取专家。请分析任务执行过程并提取经验。',
       temperature: 0.3,
       maxTokens: 512,

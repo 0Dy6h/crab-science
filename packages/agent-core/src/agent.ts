@@ -311,11 +311,13 @@ export class Agent {
         // 将工具结果回注到 session（树形节点）
         this.sessionManager.addNode(session, {
           type: 'tool_result',
-          content: result.output,
+          content: result.success
+            ? result.output
+            : result.output || result.error || '工具执行失败',
           metadata: {
             toolCallId: tc.id,
             isError: !result.success,
-            toolResult: result.output,
+            toolResult: result.output || result.error || '',
           },
         });
       }

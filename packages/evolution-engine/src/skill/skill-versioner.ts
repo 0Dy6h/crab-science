@@ -21,9 +21,11 @@ import type { GitManager } from '@crab-science/storage';
  */
 export class SkillVersioner {
   private gitManager: GitManager;
+  private workDir: string;
 
-  constructor(gitManager: GitManager) {
+  constructor(gitManager: GitManager, workDir?: string) {
     this.gitManager = gitManager;
+    this.workDir = workDir ?? process.cwd();
   }
 
   /**
@@ -37,6 +39,14 @@ export class SkillVersioner {
     const skillPath = this.findSkillPath(suggestion.skillName);
     if (!skillPath) {
       throw new Error(`Skill 文件未找到: ${suggestion.skillName}`);
+    }
+
+    // 安全前置校验：只有位于进化 Git 仓库内的 Skill 才允许自我修改，
+    // 否则一旦改动就无法回滚（且旧实现会把仓库外文件塌缩成 basename 提交，污染历史）。
+    if (!this.gitManager.isWithinRepo(skillPath)) {
+      throw new Error(
+        `Skill "${suggestion.skillName}" 不在进化 Git 仓库内（${this.gitManager.getRepoDir()}），拒绝自我修改以保证可回滚`,
+      );
     }
 
     // 读取当前内容
@@ -165,7 +175,7 @@ export class SkillVersioner {
    */
   private findSkillPath(skillName: string): string | null {
     const possiblePaths = [
-      path.join(process.cwd(), 'skills', skillName, 'SKILL.md'),
+      path.join(this.workDir, 'skills', skillName, 'SKILL.md'),
       expandTilde(`~/.crab-science/skills/${skillName}/SKILL.md`),
     ];
 
@@ -186,21 +196,27 @@ export class SkillVersioner {
     content: string,
     suggestion: OptimizationSuggestion,
   ): string {
+    const section = (suggestion.section ?? '').trim();
+    const noteText = `\n> [自动优化 v${suggestion.currentVersion + 1}] ${suggestion.suggestion}`;
+
+    // 段落名为空时不做模糊匹配（否则 includes('') 恒真会命中首行），直接追加到文件末尾
+    if (!section) {
+      return content + `\n\n## 自动优化${noteText}`;
+    }
+
     // 尝试找到对应段落
-    const sectionHeader = `## ${suggestion.section}`;
+    const sectionHeader = `## ${section}`;
     const lines = content.split('\n');
 
     let sectionIndex = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].trim().startsWith(sectionHeader) ||
-          lines[i].trim() === `#${suggestion.section}` ||
-          lines[i].toLowerCase().includes(suggestion.section.toLowerCase())) {
+          lines[i].trim() === `#${section}` ||
+          lines[i].toLowerCase().includes(section.toLowerCase())) {
         sectionIndex = i;
         break;
       }
     }
-
-    const noteText = `\n> [自动优化 v${suggestion.currentVersion + 1}] ${suggestion.suggestion}`;
 
     if (sectionIndex >= 0) {
       // 找到段落下一个小标题或文件末尾
@@ -213,7 +229,7 @@ export class SkillVersioner {
     }
 
     // 未找到段落，追加到文件末尾
-    return content + `\n\n## ${suggestion.section}${noteText}`;
+    return content + `\n\n## ${section}${noteText}`;
   }
 
   /**

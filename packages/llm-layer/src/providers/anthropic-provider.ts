@@ -25,6 +25,9 @@ export class AnthropicProvider implements LLMProvider {
    * 将统一 Message[] 转换为 Anthropic 格式，调用流式 API，yield 统一 StreamEvent
    */
   async *complete(messages: Message[], options: LLMOptions): AsyncGenerator<StreamEvent> {
+    if (!options.model || !options.model.trim()) {
+      throw new LLMError('model 不能为空：调用方必须传入具体模型名', this.name);
+    }
     try {
       const { anthropicMessages } = this.convertMessages(messages);
       const anthropicTools = options.tools ? this.convertTools(options.tools) : undefined;

@@ -74,6 +74,45 @@ export function isGlobPattern(filePath: string): boolean {
 }
 
 /**
+ * 合法的自进化 artifact 名称（Skill / Subagent 名）。
+ * 名称会被拼接进文件系统路径与 Git filepath，必须严格限制以防路径穿越。
+ */
+const SAFE_ARTIFACT_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
+/**
+ * 校验 artifact 名称是否安全（可安全用作文件名/路径片段）。
+ */
+export function isSafeArtifactName(name: string): boolean {
+  return typeof name === 'string' && SAFE_ARTIFACT_NAME.test(name);
+}
+
+/**
+ * 断言 artifact 名称安全，否则抛错。
+ * 用于任何将 LLM 生成的名称落地到文件系统的写入路径。
+ */
+export function assertSafeArtifactName(name: string): void {
+  if (!isSafeArtifactName(name)) {
+    throw new Error(
+      `非法 artifact 名称: ${JSON.stringify(name)}（仅允许字母、数字、-、_，长度 1-64，且不得以 -/_ 开头）`,
+    );
+  }
+}
+
+/**
+ * 将任意字符串净化为安全的 artifact 名称；无法净化时返回 fallback。
+ */
+export function sanitizeArtifactName(name: string, fallback: string): string {
+  if (isSafeArtifactName(name)) return name;
+  const cleaned = (name ?? '')
+    .toString()
+    .trim()
+    .replace(/[^a-z0-9_-]/gi, '-')
+    .replace(/^[-_]+/, '')
+    .slice(0, 64);
+  return isSafeArtifactName(cleaned) ? cleaned : fallback;
+}
+
+/**
  * 检查目标路径是否在指定目录内
  */
 export function isPathWithin(targetPath: string, dirPath: string): boolean {

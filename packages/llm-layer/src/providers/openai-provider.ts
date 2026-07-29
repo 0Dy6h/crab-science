@@ -22,6 +22,9 @@ export class OpenAIProvider implements LLMProvider {
    * 将统一 Message[] 转换为 OpenAI 格式，调用流式 API，yield 统一 StreamEvent
    */
   async *complete(messages: Message[], options: LLMOptions): AsyncGenerator<StreamEvent> {
+    if (!options.model || !options.model.trim()) {
+      throw new LLMError('model 不能为空：调用方必须传入具体模型名', this.name);
+    }
     try {
       const openaiMessages = this.convertMessages(messages, options.systemPrompt);
       const openaiTools = options.tools ? this.convertTools(options.tools) : undefined;

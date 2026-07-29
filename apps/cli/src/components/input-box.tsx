@@ -5,7 +5,7 @@ import Spinner from 'ink-spinner';
 import chalk from 'chalk';
 
 interface InputBoxProps {
-  onSubmit: (text: string) => void;
+  onSubmit: (text: string) => void | Promise<void>;
   isProcessing: boolean;
 }
 

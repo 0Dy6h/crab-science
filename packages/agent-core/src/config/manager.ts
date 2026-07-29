@@ -120,6 +120,23 @@ export class ConfigManager {
       errors.push('workDir 不能为空');
     }
 
+    // Phase 3: 校验 evolutionModel（若设置）。它会被推断为独立 Provider 并直接进入 LLM 请求，
+    // 空值或无法识别前缀的模型名会在运行时静默回退，这里改为启动即报错。
+    if (config.evolutionModel !== undefined) {
+      const em = config.evolutionModel;
+      if (!em || !em.trim()) {
+        errors.push('evolutionModel 不能为空字符串（删除该字段以回退到 defaultModel）');
+      } else if (
+        !em.startsWith('claude') &&
+        !em.startsWith('gpt') &&
+        !em.startsWith('deepseek')
+      ) {
+        errors.push(
+          `evolutionModel "${em}" 无法识别 Provider（应以 claude/gpt/deepseek 开头）`,
+        );
+      }
+    }
+
     // Phase 3: 校验 evolutionConfig
     if (config.evolutionConfig) {
       const ec = config.evolutionConfig;

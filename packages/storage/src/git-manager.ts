@@ -11,6 +11,20 @@ const GIT_AUTHOR = {
 };
 
 /**
+ * 目标文件不在 Git 仓库目录内时抛出。
+ * 让调用方能够明确处理“该文件不受版本控制”而非静默写坏历史。
+ */
+export class PathOutsideRepoError extends Error {
+  constructor(
+    public readonly targetPath: string,
+    public readonly repoDir: string,
+  ) {
+    super(`路径不在 Git 仓库内，拒绝提交: ${targetPath}（仓库: ${repoDir}）`);
+    this.name = 'PathOutsideRepoError';
+  }
+}
+
+/**
  * Git 版本管理器
  *
  * 使用 isomorphic-git 在 ~/.crab-science/ 维护 Git 仓库，
@@ -231,7 +245,25 @@ export class GitManager {
   }
 
   /**
-   * 将文件路径转换为相对于 repoDir 的路径
+   * 判断文件是否位于仓库目录内（不抛错版本，供调用方在写入前预检）。
+   */
+  isWithinRepo(filePath: string): boolean {
+    const absPath = path.isAbsolute(filePath)
+      ? filePath
+      : path.resolve(filePath);
+    const relative = path.relative(this.repoDir, absPath);
+    return (
+      relative !== '' &&
+      relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    );
+  }
+
+  /**
+   * 将文件路径转换为相对于 repoDir 的路径。
+   * repoDir 之外的路径会被明确拒绝，而不是静默塌缩为 basename——
+   * 后者会把 skills/foo/SKILL.md 提交成仓库根的 SKILL.md，污染版本历史。
    */
   private toRelativePath(filePath: string): string {
     const absPath = path.isAbsolute(filePath)
@@ -240,13 +272,17 @@ export class GitManager {
 
     const relative = path.relative(this.repoDir, absPath);
 
-    // 如果路径在 repoDir 之外，直接使用文件名
-    if (relative.startsWith('..')) {
-      return path.basename(filePath);
+    if (
+      relative === '' ||
+      relative === '..' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new PathOutsideRepoError(absPath, this.repoDir);
     }
 
-    // 统一使用正斜杠（isomorphic-git 要求）
-    return relative.replace(/\\/g, '/');
+    // 统一使用正斜杠（isomorphic-git 要求），且在 POSIX 上也正确
+    return relative.split(path.sep).join('/');
   }
 
   /**

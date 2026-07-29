@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChangeEntry, Experience } from '@crab-science/shared';
+import type { ChangeEntry, Experience, GitLogEntry } from '@crab-science/shared';
 import { CommandHandler } from '../../src/commands/handler.js';
 import type { UseAgentReturn } from '../../src/hooks/use-agent.js';
 
@@ -38,6 +38,7 @@ function createAgent(overrides: Partial<UseAgentReturn> = {}): UseAgentReturn {
     getDetectedPatterns: vi.fn(() => []),
     getRecentExperiences: vi.fn(() => []),
     getChangelog: vi.fn(() => []),
+    getSkillVersionHistory: vi.fn(async () => []),
     getSubagentMetrics: vi.fn(() => null),
     submitRating: vi.fn(),
     ...overrides,
@@ -93,6 +94,21 @@ const changelog: ChangeEntry[] = [
   },
 ];
 
+const gitHistory: GitLogEntry[] = [
+  {
+    hash: '1234567890abcdef',
+    message: 'feat(skill): optimize literature-search v4',
+    author: 'Crab-Science Evolution',
+    timestamp: '2026-07-22T12:00:00.000Z',
+  },
+  {
+    hash: 'fedcba0987654321',
+    message: 'feat(skill): optimize literature-search v3',
+    author: 'Crab-Science Evolution',
+    timestamp: '2026-07-21T12:00:00.000Z',
+  },
+];
+
 describe('CommandHandler Phase 3 PRD command compatibility', () => {
   it('handles /knowledge by listing recent experiences', () => {
     const handler = new CommandHandler(
@@ -132,6 +148,40 @@ describe('CommandHandler Phase 3 PRD command compatibility', () => {
     expect(result.output).toContain('v4');
     expect(result.output).toContain('Added expanded keyword guidance');
     expect(result.output).not.toContain('data-analyzer');
+  });
+
+  it('handles /versions with Git-backed skill history when available', async () => {
+    const handler = new CommandHandler(
+      createAgent({
+        getSkillVersionHistory: vi.fn(async () => gitHistory),
+        getChangelog: vi.fn(() => changelog),
+      }),
+    );
+
+    const result = await handler.handleAsync('/versions literature-search');
+
+    expect(result.handled).toBe(true);
+    expect(result.output).toContain('literature-search Git 版本历史');
+    expect(result.output).toContain('12345678');
+    expect(result.output).toContain('2026-07-22T12:00:00.000Z');
+    expect(result.output).toContain('feat(skill): optimize literature-search v4');
+    expect(result.output).not.toContain('Added expanded keyword guidance');
+  });
+
+  it('returns a clear empty state for /versions when no Git or changelog history exists', async () => {
+    const handler = new CommandHandler(
+      createAgent({
+        getSkillVersionHistory: vi.fn(async () => []),
+        getChangelog: vi.fn(() => []),
+      }),
+    );
+
+    const result = await handler.handleAsync('/versions unknown-skill');
+
+    expect(result.handled).toBe(true);
+    expect(result.output).toContain('Skill "unknown-skill" 暂无版本历史');
+    expect(result.output?.toLowerCase()).not.toContain('rollback');
+    expect(result.output).not.toContain('回滚');
   });
 
   it('lists PRD command names in /help', () => {

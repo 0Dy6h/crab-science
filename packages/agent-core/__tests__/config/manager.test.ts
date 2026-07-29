@@ -311,4 +311,26 @@ describe('ConfigManager', () => {
       expect(config.defaultModel).toBe('gpt-4o');
     });
   });
+
+  describe('evolutionModel 校验 (EVO-002)', () => {
+    it('空字符串 evolutionModel 应报错', () => {
+      manager.update({ evolutionModel: '' });
+      const result = manager.validate();
+      expect(result.errors.some((e) => e.includes('evolutionModel'))).toBe(true);
+    });
+
+    it('无法识别前缀的 evolutionModel 应报错', () => {
+      manager.update({ evolutionModel: 'gtp-4o-mini' });
+      const result = manager.validate();
+      expect(
+        result.errors.some((e) => e.includes('evolutionModel') && e.includes('gtp-4o-mini')),
+      ).toBe(true);
+    });
+
+    it('合法的 deepseek 前缀不应因 evolutionModel 报错', () => {
+      manager.update({ evolutionModel: 'deepseek-chat' });
+      const result = manager.validate();
+      expect(result.errors.some((e) => e.includes('evolutionModel'))).toBe(false);
+    });
+  });
 });

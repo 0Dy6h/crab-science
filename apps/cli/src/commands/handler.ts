@@ -1,5 +1,5 @@
 import type { UseAgentReturn } from '../hooks/use-agent.js';
-import type { ChangeEntry, Experience, SessionNode } from '@crab-science/shared';
+import type { ChangeEntry, Experience, GitLogEntry, SessionNode } from '@crab-science/shared';
 
 /** 命令处理结果 */
 export interface CommandResult {
@@ -152,6 +152,26 @@ export class CommandHandler {
           output: `未知命令: /${cmd}。输入 /help 查看可用命令。`,
         };
     }
+  }
+
+  /**
+   * 处理可能需要异步读取的命令。
+   *
+   * 保留同步 handle() 给纯内存命令和现有测试使用；CLI 运行时使用
+   * handleAsync() 让 /versions 可以读取 Git-backed history。
+   */
+  async handleAsync(input: string): Promise<CommandResult> {
+    const trimmed = input.trim();
+    if (!trimmed.startsWith('/')) {
+      return { handled: false };
+    }
+
+    const [cmd, ...args] = trimmed.slice(1).split(/\s+/);
+    if (cmd.toLowerCase() === 'versions') {
+      return this.handleVersionsAsync(args[0]);
+    }
+
+    return this.handle(input);
   }
 
   /** /model [name] */
@@ -704,10 +724,38 @@ export class CommandHandler {
     };
   }
 
+  private async handleVersionsAsync(skillName?: string): Promise<CommandResult> {
+    if (!skillName) {
+      return this.handleVersions(skillName);
+    }
+
+    let history: GitLogEntry[] = [];
+    try {
+      history = await this.agent.getSkillVersionHistory(skillName);
+    } catch {
+      history = [];
+    }
+    if (history.length > 0) {
+      return {
+        handled: true,
+        output: `${skillName} Git 版本历史 (${history.length} 条):\n${this.formatGitHistoryEntries(history)}`,
+      };
+    }
+
+    return this.handleVersions(skillName);
+  }
+
   private formatChangelogEntries(entries: ChangeEntry[]): string {
     return entries.map((entry, i) => {
       const hash = entry.commitHash ? ` (${entry.commitHash.substring(0, 8)})` : '';
       return `  [${i}] ${entry.type} | ${entry.target} v${entry.version}${hash} — ${entry.timestamp}\n      ${entry.description}`;
+    }).join('\n');
+  }
+
+  private formatGitHistoryEntries(entries: GitLogEntry[]): string {
+    return entries.map((entry, i) => {
+      const hash = entry.hash.substring(0, 8);
+      return `  [${i}] ${hash} | ${entry.timestamp} | ${entry.author}\n      ${entry.message}`;
     }).join('\n');
   }
 

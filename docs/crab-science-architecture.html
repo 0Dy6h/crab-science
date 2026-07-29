@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crab-Science Architecture and Completion Map</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #020617;
+      --panel: #0b1324;
+      --panel-2: #0f1b31;
+      --line: #24324a;
+      --muted: #91a1b8;
+      --text: #e6edf7;
+      --cyan: #22d3ee;
+      --cyan-fill: rgba(8, 51, 68, .62);
+      --green: #34d399;
+      --green-fill: rgba(6, 78, 59, .62);
+      --violet: #a78bfa;
+      --violet-fill: rgba(76, 29, 149, .62);
+      --amber: #fbbf24;
+      --amber-fill: rgba(120, 53, 15, .62);
+      --rose: #fb7185;
+      --rose-fill: rgba(136, 19, 55, .62);
+      --slate: #94a3b8;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(rgba(30, 41, 59, .18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(30, 41, 59, .18) 1px, transparent 1px),
+        var(--bg);
+      background-size: 40px 40px;
+      color: var(--text);
+      font-family: "Noto Sans SC", system-ui, sans-serif;
+    }
+
+    code, .mono, svg text {
+      font-family: "JetBrains Mono", "Noto Sans SC", monospace;
+    }
+
+    .shell {
+      width: min(1500px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 34px 0 44px;
+    }
+
+    .eyebrow {
+      color: var(--cyan);
+      font: 600 11px/1.5 "JetBrains Mono", monospace;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 {
+      margin-top: 8px;
+      font-size: clamp(25px, 4vw, 46px);
+      line-height: 1.12;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 940px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 22px;
+    }
+
+    .status-chip {
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: rgba(15, 23, 42, .78);
+      color: var(--muted);
+      font: 500 11px/1.2 "JetBrains Mono", monospace;
+    }
+
+    .status-chip strong { color: var(--text); }
+    .status-chip.good { border-color: rgba(52, 211, 153, .5); }
+    .status-chip.good strong { color: var(--green); }
+    .status-chip.warn { border-color: rgba(251, 191, 36, .5); }
+    .status-chip.warn strong { color: var(--amber); }
+    .status-chip.gap { border-color: rgba(251, 113, 133, .5); }
+    .status-chip.gap strong { color: var(--rose); }
+
+    .diagram-frame {
+      margin-top: 28px;
+      padding: 12px;
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(8, 15, 29, .83);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .24);
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      min-width: 1050px;
+      height: auto;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .card {
+      min-height: 190px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(11, 19, 36, .9);
+    }
+
+    .card.good { border-top: 2px solid var(--green); }
+    .card.warn { border-top: 2px solid var(--amber); }
+    .card.gap { border-top: 2px solid var(--rose); }
+    .card.next { border-top: 2px solid var(--cyan); }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 12px currentColor;
+    }
+
+    .good .dot { color: var(--green); }
+    .warn .dot { color: var(--amber); }
+    .gap .dot { color: var(--rose); }
+    .next .dot { color: var(--cyan); }
+
+    .card p, .card li {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .card p { margin-top: 12px; }
+
+    .card ul {
+      margin: 13px 0 0;
+      padding-left: 18px;
+    }
+
+    .card li + li { margin-top: 7px; }
+    .card li::marker { color: var(--line); }
+
+    .section {
+      margin-top: 30px;
+      padding-top: 24px;
+      border-top: 1px solid var(--line);
+    }
+
+    .section h2 {
+      font-size: 20px;
+      line-height: 1.3;
+    }
+
+    .section-intro {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .audit {
+      width: 100%;
+      margin-top: 15px;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      background: rgba(11, 19, 36, .85);
+    }
+
+    .audit th, .audit td {
+      padding: 12px 13px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .audit th {
+      color: var(--text);
+      background: rgba(15, 27, 49, .9);
+      font-weight: 600;
+    }
+
+    .audit td { color: var(--muted); }
+    .audit tr:last-child td { border-bottom: 0; }
+    .audit code { color: #c4d2e6; font-size: 11px; word-break: break-word; }
+
+    .badge {
+      display: inline-block;
+      min-width: 58px;
+      padding: 3px 6px;
+      border-radius: 4px;
+      font: 600 10px/1.2 "JetBrains Mono", monospace;
+      letter-spacing: .03em;
+      text-align: center;
+    }
+
+    .badge.good { color: var(--green); background: rgba(52, 211, 153, .12); }
+    .badge.warn { color: var(--amber); background: rgba(251, 191, 36, .12); }
+    .badge.gap { color: var(--rose); background: rgba(251, 113, 133, .12); }
+
+    details {
+      margin-top: 15px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: rgba(11, 19, 36, .85);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 14px 16px;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    details > div {
+      padding: 0 16px 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    details li + li { margin-top: 7px; }
+
+    .footer {
+      margin-top: 26px;
+      color: #5b6b84;
+      font: 11px/1.6 "JetBrains Mono", monospace;
+    }
+
+    @media (max-width: 900px) {
+      .shell { width: min(100% - 24px, 1500px); padding-top: 24px; }
+      .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 580px) {
+      .cards { grid-template-columns: 1fr; }
+      .card { min-height: auto; }
+      .lede { font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="eyebrow">Crab-Science / first-principles audit / 2026-07-22</div>
+    <h1>整体架构与完成度地图</h1>
+    <p class="lede">
+      当前定位：可运行的技术预览版，核心 Agent 链路已成形，Phase 3 的 Skill、Subagent、Knowledge 三层机制已经接入代码，但还没有全部收敛成可持续、可确认、可恢复的产品闭环。
+    </p>
+
+    <div class="status-row" aria-label="项目状态摘要">
+      <div class="status-chip good"><strong>70</strong> 个运行时源文件</div>
+      <div class="status-chip good"><strong>35</strong> 个测试文件 / <strong>558</strong> 个测试用例</div>
+      <div class="status-chip good">Node <strong>20.20.2</strong> 本地验证</div>
+      <div class="status-chip warn">Phase 3：<strong>4/6</strong> 切片已本地完成</div>
+      <div class="status-chip gap">生产就绪度：<strong>低</strong></div>
+    </div>
+
+    <section class="diagram-frame" aria-label="Crab-Science system architecture diagram">
+      <svg viewBox="0 0 1280 790" role="img" aria-labelledby="diagram-title diagram-desc">
+        <title id="diagram-title">Crab-Science software architecture</title>
+        <desc id="diagram-desc">CLI, agent core, LLM providers, evolution engine, SQLite, Git and project assets with completion status.</desc>
+        <defs>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+          </pattern>
+          <marker id="arrow-cyan" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#22d3ee"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#34d399"/>
+          </marker>
+          <marker id="arrow-violet" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#a78bfa"/>
+          </marker>
+          <marker id="arrow-amber" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#fbbf24"/>
+          </marker>
+          <marker id="arrow-rose" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#fb7185"/>
+          </marker>
+        </defs>
+
+        <rect width="1280" height="790" fill="url(#grid)"/>
+
+        <!-- Flows are drawn before component boxes so they never visually cut through a node. -->
+        <path d="M174 356 H202" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+        <path d="M502 205 H532" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrow-cyan)"/>
+        <path d="M502 270 C610 410 760 430 900 285" fill="none" stroke="#34d399" stroke-width="2" marker-end="url(#arrow-green)"/>
+        <path d="M700 590 V630" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+        <path d="M800 590 C850 610 900 610 950 590" fill="none" stroke="#a78bfa" stroke-width="2" marker-end="url(#arrow-violet)"/>
+        <path d="M1070 440 V470" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrow-amber)"/>
+        <path d="M1160 440 C1195 460 1195 470 1160 490" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow-rose)"/>
+        <path d="M900 375 C820 375 820 740 470 740" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrow-rose)"/>
+        <path d="M1095 205 C1045 185 1010 185 980 205" fill="none" stroke="#fbbf24" stroke-width="2" marker-end="url(#arrow-amber)"/>
+
+        <!-- External user -->
+        <g>
+          <rect x="24" y="328" width="150" height="86" rx="7" fill="#0b1324"/>
+          <rect x="24" y="328" width="150" height="86" rx="7" fill="rgba(30,41,59,.72)" stroke="#94a3b8" stroke-width="1.5"/>
+          <text x="99" y="356" fill="#e6edf7" font-size="14" font-weight="600" text-anchor="middle">用户</text>
+          <text x="99" y="378" fill="#91a1b8" font-size="10" text-anchor="middle">科研任务 / 命令</text>
+          <text x="99" y="398" fill="#94a3b8" font-size="9" text-anchor="middle">external input</text>
+        </g>
+
+        <!-- CLI boundary -->
+        <g>
+          <rect x="202" y="74" width="300" height="252" rx="10" fill="rgba(34,211,238,.04)" stroke="#22d3ee" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="218" y="96" fill="#22d3ee" font-size="11" font-weight="600">FRONTEND / apps/cli</text>
+
+          <rect x="222" y="122" width="120" height="62" rx="6" fill="#0b1324"/>
+          <rect x="222" y="122" width="120" height="62" rx="6" fill="var(--cyan-fill)" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="282" y="148" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Ink App</text>
+          <text x="282" y="167" fill="#91a1b8" font-size="9" text-anchor="middle">render / stream</text>
+
+          <rect x="362" y="122" width="120" height="62" rx="6" fill="#0b1324"/>
+          <rect x="362" y="122" width="120" height="62" rx="6" fill="var(--cyan-fill)" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="422" y="148" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">CommandHandler</text>
+          <text x="422" y="167" fill="#91a1b8" font-size="9" text-anchor="middle">slash commands</text>
+
+          <rect x="222" y="214" width="260" height="76" rx="6" fill="#0b1324"/>
+          <rect x="222" y="214" width="260" height="76" rx="6" fill="var(--cyan-fill)" stroke="#22d3ee" stroke-width="1.5"/>
+          <text x="352" y="242" fill="#e6edf7" font-size="13" font-weight="600" text-anchor="middle">useAgent</text>
+          <text x="352" y="263" fill="#91a1b8" font-size="9" text-anchor="middle">wires runtime + CLI state</text>
+          <text x="352" y="280" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: event UI not connected</text>
+        </g>
+
+        <!-- Agent core boundary -->
+        <g>
+          <rect x="532" y="74" width="348" height="516" rx="10" fill="rgba(52,211,153,.04)" stroke="#34d399" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="548" y="96" fill="#34d399" font-size="11" font-weight="600">CORE / packages/agent-core</text>
+
+          <rect x="552" y="122" width="144" height="72" rx="6" fill="#0b1324"/>
+          <rect x="552" y="122" width="144" height="72" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="624" y="149" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Agent Loop</text>
+          <text x="624" y="169" fill="#91a1b8" font-size="9" text-anchor="middle">stream + tool calls</text>
+          <text x="624" y="183" fill="#34d399" font-size="8" text-anchor="middle">DONE</text>
+
+          <rect x="716" y="122" width="144" height="72" rx="6" fill="#0b1324"/>
+          <rect x="716" y="122" width="144" height="72" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="788" y="149" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">ContextBuilder</text>
+          <text x="788" y="169" fill="#91a1b8" font-size="9" text-anchor="middle">prompt + path context</text>
+          <text x="788" y="183" fill="#34d399" font-size="8" text-anchor="middle">DONE</text>
+
+          <rect x="552" y="226" width="144" height="72" rx="6" fill="#0b1324"/>
+          <rect x="552" y="226" width="144" height="72" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="624" y="253" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">ToolRegistry</text>
+          <text x="624" y="273" fill="#91a1b8" font-size="9" text-anchor="middle">read / write / edit / bash</text>
+          <text x="624" y="287" fill="#34d399" font-size="8" text-anchor="middle">DONE</text>
+
+          <rect x="716" y="226" width="144" height="72" rx="6" fill="#0b1324"/>
+          <rect x="716" y="226" width="144" height="72" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="788" y="253" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Session Tree</text>
+          <text x="788" y="273" fill="#91a1b8" font-size="9" text-anchor="middle">fork / rollback / summary</text>
+          <text x="788" y="287" fill="#34d399" font-size="8" text-anchor="middle">DONE</text>
+
+          <rect x="552" y="330" width="308" height="94" rx="6" fill="#0b1324"/>
+          <rect x="552" y="330" width="308" height="94" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="706" y="357" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Skills / Extensions / Subagents</text>
+          <text x="706" y="379" fill="#91a1b8" font-size="9" text-anchor="middle">progressive disclosure + hot reload</text>
+          <text x="706" y="397" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: SQLite logger wiring is missing</text>
+          <text x="706" y="412" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: delegated tool loop needs hardening</text>
+
+          <rect x="552" y="456" width="308" height="96" rx="6" fill="#0b1324"/>
+          <rect x="552" y="456" width="308" height="96" rx="6" fill="var(--green-fill)" stroke="#34d399" stroke-width="1.5"/>
+          <text x="706" y="483" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Task completion hook</text>
+          <text x="706" y="505" fill="#91a1b8" font-size="9" text-anchor="middle">records task + triggers evolution</text>
+          <text x="706" y="523" fill="#34d399" font-size="8" text-anchor="middle">DONE: local mock path</text>
+          <text x="706" y="538" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: real-provider smoke missing</text>
+        </g>
+
+        <!-- Evolution engine boundary -->
+        <g>
+          <rect x="900" y="74" width="350" height="366" rx="10" fill="rgba(251,113,133,.04)" stroke="#fb7185" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="916" y="96" fill="#fb7185" font-size="11" font-weight="600">EVOLUTION / packages/evolution-engine</text>
+
+          <rect x="920" y="122" width="142" height="72" rx="6" fill="#0b1324"/>
+          <rect x="920" y="122" width="142" height="72" rx="6" fill="var(--rose-fill)" stroke="#fb7185" stroke-width="1.5"/>
+          <text x="991" y="149" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Scheduler</text>
+          <text x="991" y="169" fill="#91a1b8" font-size="9" text-anchor="middle">task interval / rating</text>
+          <text x="991" y="183" fill="#34d399" font-size="8" text-anchor="middle">DONE</text>
+
+          <rect x="1078" y="122" width="152" height="72" rx="6" fill="#0b1324"/>
+          <rect x="1078" y="122" width="152" height="72" rx="6" fill="var(--amber-fill)" stroke="#fbbf24" stroke-width="1.5"/>
+          <text x="1154" y="149" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Skill Evolution</text>
+          <text x="1154" y="169" fill="#91a1b8" font-size="9" text-anchor="middle">metrics / optimize / rollback</text>
+          <text x="1154" y="183" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: HITL missing</text>
+
+          <rect x="920" y="226" width="310" height="86" rx="6" fill="#0b1324"/>
+          <rect x="920" y="226" width="310" height="86" rx="6" fill="var(--rose-fill)" stroke="#fb7185" stroke-width="1.5"/>
+          <text x="1075" y="253" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Subagent evolution + delegation</text>
+          <text x="1075" y="274" fill="#91a1b8" font-size="9" text-anchor="middle">detect / draft / branch / summarize</text>
+          <text x="1075" y="293" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: auto-create, tool name loss</text>
+
+          <rect x="920" y="340" width="310" height="72" rx="6" fill="#0b1324"/>
+          <rect x="920" y="340" width="310" height="72" rx="6" fill="var(--rose-fill)" stroke="#fb7185" stroke-width="1.5"/>
+          <text x="1075" y="367" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">Knowledge pipeline</text>
+          <text x="1075" y="387" fill="#91a1b8" font-size="9" text-anchor="middle">extract / graph / retrieve / inject</text>
+          <text x="1075" y="402" fill="#34d399" font-size="8" text-anchor="middle">DONE: mock-backed local path</text>
+        </g>
+
+        <!-- LLM providers -->
+        <g>
+          <rect x="532" y="630" width="348" height="92" rx="10" fill="rgba(251,191,36,.04)" stroke="#fbbf24" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="548" y="652" fill="#fbbf24" font-size="11" font-weight="600">LLM LAYER / packages/llm-layer</text>
+          <text x="556" y="681" fill="#e6edf7" font-size="12" font-weight="600">ProviderRegistry</text>
+          <text x="556" y="701" fill="#91a1b8" font-size="9">OpenAI  /  Anthropic  /  DeepSeek</text>
+          <text x="823" y="701" fill="#fbbf24" font-size="8" text-anchor="end">PARTIAL: evolution calls pass model: ''</text>
+        </g>
+
+        <!-- Storage boundary -->
+        <g>
+          <rect x="900" y="470" width="350" height="252" rx="10" fill="rgba(167,139,250,.04)" stroke="#a78bfa" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="916" y="492" fill="#a78bfa" font-size="11" font-weight="600">STATE / packages/storage + ~/.crab-science</text>
+
+          <rect x="920" y="520" width="142" height="78" rx="6" fill="#0b1324"/>
+          <rect x="920" y="520" width="142" height="78" rx="6" fill="var(--violet-fill)" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="991" y="548" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">SQLite</text>
+          <text x="991" y="568" fill="#91a1b8" font-size="9" text-anchor="middle">metrics / knowledge</text>
+          <text x="991" y="585" fill="#fbbf24" font-size="8" text-anchor="middle">PARTIAL: some tables unused</text>
+
+          <rect x="1078" y="520" width="152" height="78" rx="6" fill="#0b1324"/>
+          <rect x="1078" y="520" width="152" height="78" rx="6" fill="var(--violet-fill)" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="1154" y="548" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">GitManager</text>
+          <text x="1154" y="568" fill="#91a1b8" font-size="9" text-anchor="middle">skill / subagent history</text>
+          <text x="1154" y="585" fill="#fb7185" font-size="8" text-anchor="middle">GAP: external workdir path</text>
+
+          <rect x="920" y="624" width="310" height="78" rx="6" fill="#0b1324"/>
+          <rect x="920" y="624" width="310" height="78" rx="6" fill="var(--violet-fill)" stroke="#a78bfa" stroke-width="1.5"/>
+          <text x="1075" y="652" fill="#e6edf7" font-size="12" font-weight="600" text-anchor="middle">JSON session files</text>
+          <text x="1075" y="672" fill="#91a1b8" font-size="9" text-anchor="middle">~/.crab-science/sessions/{id}.json</text>
+          <text x="1075" y="689" fill="#34d399" font-size="8" text-anchor="middle">DONE: tree persistence + V1 migration</text>
+        </g>
+
+        <!-- Project assets -->
+        <g>
+          <rect x="202" y="454" width="300" height="158" rx="10" fill="rgba(148,163,184,.04)" stroke="#94a3b8" stroke-width="1" stroke-dasharray="8 5"/>
+          <text x="218" y="476" fill="#94a3b8" font-size="11" font-weight="600">PROJECT ASSETS / workDir</text>
+          <text x="226" y="510" fill="#e6edf7" font-size="12" font-weight="600">skills/</text>
+          <text x="226" y="530" fill="#91a1b8" font-size="9">SKILL.md + attachments + scripts</text>
+          <text x="226" y="562" fill="#e6edf7" font-size="12" font-weight="600">extensions/</text>
+          <text x="226" y="582" fill="#91a1b8" font-size="9">web-search.ts + arxiv-search.ts</text>
+          <text x="475" y="594" fill="#fbbf24" font-size="8" text-anchor="end">PARTIAL: versioner assumes process.cwd()</text>
+        </g>
+
+        <!-- Flow labels -->
+        <text x="187" y="347" fill="#91a1b8" font-size="8" text-anchor="middle">input</text>
+        <text x="517" y="195" fill="#91a1b8" font-size="8" text-anchor="middle">request</text>
+        <text x="770" y="411" fill="#34d399" font-size="8" text-anchor="middle">task complete</text>
+        <text x="735" y="620" fill="#91a1b8" font-size="8">completion / evolution calls</text>
+        <text x="1110" y="458" fill="#fb7185" font-size="8" text-anchor="middle">events stored, UI not rendered</text>
+      </svg>
+    </section>
+
+    <section class="cards" aria-label="completion summary">
+      <article class="card good">
+        <div class="card-title"><span class="dot"></span>已经成立</div>
+        <ul>
+          <li>Agent 流式循环、工具调用、Token 统计和错误路径有测试。</li>
+          <li>Session tree 支持 fork、rollback、jump、summary，Subagent 分支透明度已有集成测试。</li>
+          <li>SQLite schema、JSONL 迁移、Skill 指标、知识检索、Git 基础能力均已落地。</li>
+        </ul>
+      </article>
+
+      <article class="card warn">
+        <div class="card-title"><span class="dot"></span>部分完成</div>
+        <ul>
+          <li>Phase 3 的事件流已经产生并进入 hook state，但 CLI 没有渲染 proposal、rating、rollback 等事件。</li>
+          <li>/knowledge 和 /versions 的基础命令可用，view、diff、rollback、status 等深度操作仍缺。</li>
+          <li>大量 EvolutionEngine 测试使用 mock，真实 Provider、真实工作目录和真实 Git 路径尚未打通。</li>
+        </ul>
+      </article>
+
+      <article class="card gap">
+        <div class="card-title"><span class="dot"></span>当前硬缺口</div>
+        <ul>
+          <li>重大 Skill 修改没有 y/n 确认回路，只有 optimization_proposed 事件，尚未调用 applyOptimization。</li>
+          <li>Subagent 工具循环在 tool_call_end 时丢失工具名，并且执行阶段没有使用声明的 allowlist。</li>
+          <li>Skill 版本 Git 仓库位于全局目录，而项目 Skill 位于 workDir，路径映射目前不可靠。</li>
+        </ul>
+      </article>
+
+      <article class="card next">
+        <div class="card-title"><span class="dot"></span>建议推进顺序</div>
+        <ol>
+          <li>先修真实运行正确性：Provider model、workDir、Git path、Subagent tool loop。</li>
+          <li>再收敛状态边界：SQLite logger、changelog 持久化、事件到 CLI 的可见消费。</li>
+          <li>最后完成 HITL、端到端测试、远程 CI 和发布/升级策略。</li>
+        </ol>
+      </article>
+    </section>
+
+    <section class="section">
+      <h2>证据化审计</h2>
+      <p class="section-intro">判断依据是当前源码和本地验证结果，不把“有类、有接口、有单测”直接等同于“用户闭环已经成立”。</p>
+      <table class="audit">
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>代码证据</th>
+            <th>第一性解释</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="badge gap">GAP</span></td>
+            <td><code>packages/evolution-engine/src/evolution-engine.ts:352</code><br><code>apps/cli/src/hooks/use-agent.ts:114</code></td>
+            <td>系统会产生 <code>optimization_proposed</code> 并存入 hook state，但 App 没有消费它；重大变更因此没有“展示、接受、拒绝、记录”这一完整控制回路。</td>
+          </tr>
+          <tr>
+            <td><span class="badge gap">GAP</span></td>
+            <td><code>packages/evolution-engine/src/skill/skill-optimizer.ts:221</code><br><code>packages/evolution-engine/src/knowledge/experience-extractor.ts:129</code></td>
+            <td>进化调用把 <code>LLMOptions.model</code> 设为 <code>''</code>。Provider 会把这个值直接交给上游 SDK，mock 不会暴露问题，真实进化链路不能据此判定为可用。</td>
+          </tr>
+          <tr>
+            <td><span class="badge gap">GAP</span></td>
+            <td><code>packages/evolution-engine/src/subagent/subagent-delegator.ts:299-304</code></td>
+            <td>收到 <code>tool_call_end</code> 时把工具名写成空字符串，后续无法正确执行 Subagent 的工具调用；同时执行阶段使用全量 registry，声明的工具边界没有真正生效。</td>
+          </tr>
+          <tr>
+            <td><span class="badge warn">PARTIAL</span></td>
+            <td><code>packages/evolution-engine/src/skill/skill-versioner.ts:166-170</code><br><code>packages/storage/src/git-manager.ts:236-247</code></td>
+            <td>版本器只从 <code>process.cwd()</code> 找 Skill，GitManager 对仓库外文件退化为 basename。自定义 <code>--workdir</code> 或多个 Skill 时，版本历史和提交归属可能失真。</td>
+          </tr>
+          <tr>
+            <td><span class="badge warn">PARTIAL</span></td>
+            <td><code>apps/cli/src/hooks/use-agent.ts:282</code><br><code>packages/agent-core/src/skills/loader.ts:64</code></td>
+            <td>SkillLoader 先于数据库创建，虽然提供了 <code>setSkillMetricsRepo</code>，当前启动路径没有调用它。EvolutionEngine 写 SQLite，而 CLI 历史查询可能仍读 JSONL，状态源发生分叉。</td>
+          </tr>
+          <tr>
+            <td><span class="badge warn">PARTIAL</span></td>
+            <td><code>apps/cli/src/app.tsx:27-49</code><br><code>apps/cli/src/commands/handler.ts:615</code></td>
+            <td>树视图状态只被初始化为 false 并被再次设为 false，没有打开路径；<code>/knowledge view</code> 也明确返回“当前版本支持列表和搜索”，说明 PRD 深度命令仍未闭环。</td>
+          </tr>
+          <tr>
+            <td><span class="badge good">DONE</span></td>
+            <td><code>docs/handoffs/2026-07-22-phase3-slices4-5.md</code></td>
+            <td>Node 20.20.2 下已记录 build、typecheck、全量 Vitest 通过，当前基线为 34 个测试文件、558 个测试；这是工程质量信号，不等同于生产可用性证明。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>从第一性原则看，项目处在什么水平</h2>
+      <p class="section-intro">把系统拆成最小的价值链：输入能否被执行，状态能否被保存，反馈能否被理解，变化能否被批准和恢复，最后才是能否持续交付。</p>
+      <details open>
+        <summary>结论：工程原型强，产品闭环弱，生产就绪度低</summary>
+        <div>
+          <ul>
+            <li><strong>它不是空壳：</strong>核心运行时、Provider 抽象、工具、Session tree、SQLite、Git、Evolution modules 和 CLI 都有真实实现，测试量也足以支撑继续迭代。</li>
+            <li><strong>它还不是稳定产品：</strong>自我进化的危险操作、外部真实 Provider、跨工作目录版本控制、状态持久化一致性和用户可见的确认回路仍有硬缺口。</li>
+            <li><strong>最准确的标签：</strong><code>Phase 2.5 + Phase 3 alpha</code>，适合继续做垂直切片、架构实验和本地技术预览，不适合把“自动改 Skill 并自动创建 Subagent”当成默认可信能力。</li>
+            <li><strong>当前评分仅作决策工具：</strong>核心执行链约 7/10，进化闭环约 4/10，CLI 产品完整度约 4/10，测试与工程纪律约 7/10，生产准备度约 2/10。综合约 5/10，短板集中在集成正确性和用户控制权，而不是代码数量。</li>
+          </ul>
+        </div>
+      </details>
+      <details>
+        <summary>验证边界：已经验证了什么，还没有验证什么</summary>
+        <div>
+          <ul>
+            <li>已验证：Node 20.20.2 下的本地构建、类型检查、全量 Vitest；SQLite migration、GitManager、指标算法、知识检索、Session tree、Subagent 分支透明度等局部行为。</li>
+            <li>未验证：带真实 API key 的 OpenAI、Anthropic、DeepSeek 任务；真实 Evolution LLM 调用；用户指定 workDir 下的 Skill Git 版本化；完整 CLI Ink 交互；GitHub Actions 远程 CI。</li>
+          </ul>
+        </div>
+      </details>
+    </section>
+
+    <p class="footer">Crab-Science architecture map • static HTML • inline SVG • no runtime JavaScript</p>
+  </main>
+</body>
+</html>

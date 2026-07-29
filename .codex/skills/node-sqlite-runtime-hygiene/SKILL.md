@@ -1,8 +1,8 @@
 ---
 name: node-sqlite-runtime-hygiene
 description: Use when installing, testing, building, or debugging Crab-Science code that touches SQLite, better-sqlite3, pnpm, Turbo, or Node runtime compatibility.
-version: 1
-lastUpdated: 2026-07-22
+version: 2
+lastUpdated: 2026-07-26
 ---
 
 # Node / SQLite Runtime Hygiene
@@ -88,6 +88,33 @@ foreach ($pkg in $packages) {
 
 Build outputs in `dist/` and Turbo caches are ignored and can be removed after verification.
 
+## Workspace relocation breaks the toolchain (checked 2026-07-26)
+
+pnpm writes **absolute** symlinks into `node_modules` (each `node_modules/<pkg>` points at an absolute path under `node_modules/.pnpm/...`). If the workspace directory is moved or renamed after install — e.g. from `D:\开发\...` to `D:\螃蟹's Projects\...` — every one of those symlinks dangles and points at the old, now-missing path. Symptoms: `vitest`, `tsup`, `tsc`, and any `@crab-science/*` import fail with `Cannot find module` / `ERR_MODULE_NOT_FOUND`, even though `node_modules` looks populated. The sandbox-fallback binaries above will NOT work in this state.
+
+Diagnose by resolving a workspace symlink and checking the target exists:
+
+```bash
+readlink node_modules/vitest   # if it points at a path that no longer exists, symlinks are stale
+```
+
+Fix by reinstalling under Node 20 (this also rebuilds `better-sqlite3` for the current ABI). pnpm will prompt to purge `node_modules`; make it non-interactive:
+
+```bash
+CI=1 pnpm install --frozen-lockfile --prefer-offline --config.confirmModulesPurge=false
+```
+
+Do this **first** in any fresh session whose repo path differs from where dependencies were originally installed. A plain `pnpm install` may exit 0 at the interactive purge prompt without actually reinstalling — always pass the flags above.
+
+## Vitest resolves to src, tsc resolves to dist
+
+Two different module-resolution rules apply in this monorepo, and confusing them wastes time:
+
+- Root `vitest.config.ts` aliases every `@crab-science/*` to that package's `src/index.ts`. So **tests run against source** — you do not need to build a package to test changes to it, and a cross-package edit is visible to tests immediately.
+- `tsc` and `tsup` (and the built CLI at runtime) resolve `@crab-science/*` through each package's `package.json` `exports`, i.e. its built `dist/`. So **typecheck sees stale types** until you rebuild.
+
+Consequence: if a downstream package's `tsc --noEmit` reports "no exported member X" or "property Y does not exist" for a symbol you just added to `shared`/`storage`, that is a stale-`dist` error, not a real one. Rebuild dependencies in order (`shared` → `storage` → `llm-layer` → `evolution-engine` → `agent-core` → `apps/cli`) before typechecking downstream. Tests passing while typecheck fails is the tell.
+
 ## CI workflow push note
 
 This repository's CI workflow validates the Node 20 / SQLite baseline. When a commit adds or edits `.github/workflows/*.yml`, GitHub requires the pushing token to include the `workflow` scope.
@@ -104,6 +131,18 @@ gh auth refresh -h github.com -s workflow
 - `ERR_PNPM_UNSUPPORTED_ENGINE` under Node 24 is expected and good; it means the guardrail is working.
 - `better-sqlite3` attempting source compilation usually means the wrong Node version or missing native prebuilt for the active ABI.
 - If SQLite tests are skipped or fail to load `better-sqlite3`, verify Node version before changing storage code.
+
+## Integration truth checks
+
+Use these checks before calling a Node/SQLite-backed evolution change complete. Slice H (2026-07-26) fixed the P0 versions of all of these and added regression tests — treat those tests as the guardrail and keep them green:
+
+- Treat mock-backed EvolutionEngine tests as unit evidence only. Run a real Provider smoke path, or label the capability explicitly as mock-backed. (Real-provider smoke is still pending.)
+- Pass an explicit non-empty model through every evolution LLM call. Providers now throw on `model: ''` — see `packages/llm-layer/__tests__/provider-model-guard.test.ts`.
+- Treat the configured `workDir` as the source of truth for project Skills and Extensions. `GitManager` now refuses (throws `PathOutsideRepoError`) rather than basename-collapsing out-of-repo paths — see `packages/storage/__tests__/git-manager-containment.test.ts`.
+- Wire the SkillLoader execution logger to the same SQLite repository used by EvolutionEngine after database initialization (done in `apps/cli/src/hooks/use-agent.ts`). Do not assume a fallback JSONL reader observes SQLite writes.
+- Trace every EvolutionEngine event to a CLI consumer. An emitted event without a rendered state, user decision, or persisted audit record is not a completed product capability. (Errors now surface; the `optimization_proposed` confirmation loop and changelog persistence are still open.)
+- For Subagent integration, test at least one tool-using delegation, not only a text-only provider response. Preserve the tool name from `tool_call_start` through execution and enforce the declared allowlist — see `packages/agent-core/__tests__/subagents/delegator-tool-loop.test.ts`.
+- Never let an LLM-authored artifact name reach the filesystem unsanitized — use `assertSafeArtifactName`/`sanitizeArtifactName` from `@crab-science/shared`; see `packages/shared/__tests__/artifact-name.test.ts`.
 
 ## What to preserve
 

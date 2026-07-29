@@ -27,13 +27,13 @@ export function App({ workDir }: AppProps): React.ReactElement {
   const [showTreeView, setShowTreeView] = useState(false);
 
   const handleSubmit = useCallback(
-    (text: string) => {
+    async (text: string) => {
       // 隐藏欢迎界面
       setShowWelcome(false);
 
       // 处理斜杠命令（每次创建新 handler 以获取最新 agent 状态）
       const handler = new CommandHandler(agent);
-      const result = handler.handle(text);
+      const result = await handler.handleAsync(text);
       if (result.handled) {
         if (result.output) {
           const sysMsg: DisplayMessage = {

@@ -103,6 +103,7 @@ describe('EvolutionEngine - mock-based tests', () => {
       database: createMockDatabase() as any,
       gitManager: createMockGitManager() as any,
       evolutionProvider: createMockProvider(),
+      evolutionModel: 'test-evolution-model',
       config: {
         taskInterval: 10,
         ratingInterval: 3,

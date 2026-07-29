@@ -14,6 +14,7 @@ import type {
   SubagentMetrics,
   ChangeEntry,
   SubagentFrontmatter,
+  GitLogEntry,
 } from '@crab-science/shared';
 import {
   Agent,
@@ -31,7 +32,7 @@ import type { BranchInfo, TreeStructure } from '@crab-science/agent-core';
 import { createProvider, ProviderRegistry } from '@crab-science/llm-layer';
 import { EvolutionEngine } from '@crab-science/evolution-engine';
 import { SubagentDelegator } from '@crab-science/evolution-engine';
-import { CrabDatabase, GitManager } from '@crab-science/storage';
+import { CrabDatabase, GitManager, SkillMetricsRepository } from '@crab-science/storage';
 import {
   GLOBAL_EXTENSIONS_DIR,
   PROJECT_EXTENSIONS_DIR,
@@ -89,6 +90,7 @@ export interface UseAgentReturn {
   getDetectedPatterns: () => PatternMatch[];
   getRecentExperiences: (limit?: number) => Experience[];
   getChangelog: () => ChangeEntry[];
+  getSkillVersionHistory: (skillName: string) => Promise<GitLogEntry[]>;
   getSubagentMetrics: (name: string) => SubagentMetrics | null;
   submitRating: (skillName: string, rating: number) => void;
 }
@@ -325,33 +327,48 @@ export function useAgent(workDir: string): UseAgentReturn {
           database.initialize();
           databaseRef.current = database;
 
+          // P-01 修复：把 SkillLoader 的执行记录读/写统一到 SQLite，
+          // 否则 loader 读空 JSONL、EvolutionEngine 写 SQLite，两个存储长期分叉。
+          const skillMetricsRepo = new SkillMetricsRepository(database);
+          skillLoader.setSkillMetricsRepo(skillMetricsRepo);
+          setSkills(skillLoader.discover());
+
           const gitManager = new GitManager();
           await gitManager.initialize();
           gitManagerRef.current = gitManager;
 
-          // 获取进化分析 Provider（可能需要单独的 API Key）
+          // 解析进化分析的 Provider 与模型。
+          // 关键：当进化 Provider 回退到主 Provider 时，模型也必须回退到主模型，
+          // 否则会把 deepseek 的模型名发给 Anthropic，导致 400。
           let evolutionProvider = provider;
-          const evolutionProviderName = configManagerRef.current?.getEvolutionProviderName();
+          let evolutionModel = config.defaultModel;
+          const evolutionModelName = configManagerRef.current!.getEvolutionModel();
+          const evolutionProviderName = configManagerRef.current!.getEvolutionProviderName();
 
-          if (evolutionProviderName && evolutionProviderName !== config.defaultProvider) {
+          if (evolutionProviderName === config.defaultProvider) {
+            // 同一 Provider：进化模型与主 Provider 兼容，直接使用
+            evolutionModel = evolutionModelName;
+          } else {
             try {
               const evolutionApiKey = configManagerRef.current!.getApiKey(evolutionProviderName);
               evolutionProvider = createProvider(evolutionProviderName, evolutionApiKey);
+              evolutionModel = evolutionModelName;
               if (!providerRegistryRef.current!.has(evolutionProviderName)) {
                 providerRegistryRef.current!.register(evolutionProvider);
               }
             } catch {
-              console.warn('[useAgent] 进化 Provider API Key 未设置，回退到主 Provider');
+              console.warn('[useAgent] 进化 Provider API Key 未设置，回退到主 Provider 与主模型');
             }
           }
 
-          // 创建 SubagentDelegator
+          // 创建 SubagentDelegator（使用用户选定的 workDir，而非 process.cwd()）
           const subagentDelegator = new SubagentDelegator(
             sessionManager,
             providerRegistryRef.current!,
             toolRegistry,
             skillLoader,
             contextBuilder,
+            workDir,
           );
 
           // 创建 EvolutionEngine
@@ -359,7 +376,9 @@ export function useAgent(workDir: string): UseAgentReturn {
             database,
             gitManager,
             evolutionProvider,
+            evolutionModel,
             config: config.evolutionConfig ?? {},
+            workDir,
             subagentDelegator,
           });
           evolutionEngineRef.current = evolutionEngine;
@@ -468,7 +487,17 @@ export function useAgent(workDir: string): UseAgentReturn {
             break;
           }
           case 'error': {
+            // F1 修复：把 Agent/Provider 的错误明确呈现给用户，而不是静默吞掉
             refreshDisplay();
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: nextMessageId(),
+                role: 'assistant',
+                content: `[错误] ${event.message}`,
+                isSystem: true,
+              },
+            ]);
             break;
           }
           case 'done': {
@@ -735,6 +764,16 @@ export function useAgent(workDir: string): UseAgentReturn {
     return evolutionEngineRef.current.getChangelog();
   }, []);
 
+  /** 获取 Git-backed Skill 版本历史 */
+  const getSkillVersionHistory = useCallback(async (skillName: string): Promise<GitLogEntry[]> => {
+    if (!evolutionEngineRef.current) return [];
+    try {
+      return await evolutionEngineRef.current.getSkillVersionHistory(skillName);
+    } catch {
+      return [];
+    }
+  }, []);
+
   /** 获取 Subagent 指标 */
   const getSubagentMetrics = useCallback((name: string): SubagentMetrics | null => {
     if (!evolutionEngineRef.current) return null;
@@ -787,6 +826,7 @@ export function useAgent(workDir: string): UseAgentReturn {
     getDetectedPatterns,
     getRecentExperiences,
     getChangelog,
+    getSkillVersionHistory,
     getSubagentMetrics,
     submitRating,
   };
